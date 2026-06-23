@@ -3,3 +3,6 @@
 *.exe
 *.test
 *.out
+
+# Downloaded conformance tooling (Jing); fetched by scripts/conformance.sh
+/tools/

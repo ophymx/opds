@@ -177,14 +177,46 @@ xmlBytes, _ := opds1.Marshal(feed)  // OPDS 1.2 Atom
 jsonBytes, _ := opds2.Marshal(feed) // OPDS 2.0 JSON
 ```
 
+## Conformance
+
+The encoders are tested against the **official** OPDS schemas, not just
+hand-written expectations:
+
+- **OPDS 2.0** output is validated against the official JSON Schemas from
+  [`opds-community/specs`](https://github.com/opds-community/specs) and the
+  Readium Web Publication Manifest schemas they reference. These tests are pure
+  Go (using a vendored copy of the schemas) and run under `go test ./...`.
+- **OPDS 1.2** output is validated against the official RELAX NG schema
+  (`opds.rnc`) with [Jing](https://github.com/relaxng/jing-trang) — the
+  reference validator behind the official OPDS validator. These tests need a JRE
+  and skip automatically when Java/Jing are absent, so `go test ./...` still
+  passes everywhere.
+
+To run the 1.2 RELAX NG tests, which fetch Jing into `tools/` on first run:
+
+```sh
+scripts/conformance.sh
+```
+
+Vendored schema provenance (and the one documented upstream-typo fix in
+`opds.rnc`) is recorded in the `testdata/schema/*/SOURCES.md` files.
+
 ## Status / scope
 
-- OPDS **1.2** and **2.0** feeds, navigation and acquisition.
-- Full acquisition model including library lending (availability/holds/copies),
-  prices, and nested indirect acquisition.
+- OPDS **1.2** and **2.0** feeds, navigation and acquisition — validated against
+  the official schemas (see [Conformance](#conformance)).
+- Acquisition model including prices, nested indirect acquisition, and library
+  lending (availability/holds/copies).
 - Facets, groups, pagination, OpenSearch.
-- Not yet included: the OPDS Authentication document flow (the model leaves room
-  for it). Contributions welcome.
+
+A note on **library lending in 1.2**: `opds:availability`/`holds`/`copies` are
+standard in OPDS 2.0 but are *not* part of the official OPDS 1.2 RELAX NG schema
+— they are a de-facto 1.x extension (Library Simplified/Palace). The library
+emits them in both versions because real library clients rely on them; just be
+aware that a 1.2 feed using them intentionally goes beyond the core 1.2 schema.
+
+Not yet included: the OPDS Authentication document flow (the model leaves room
+for it). Contributions welcome.
 
 ## References
 
