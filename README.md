@@ -224,3 +224,7 @@ for it). Contributions welcome.
 - [OPDS 2.0 specification](https://drafts.opds.io/opds-2.0)
 - [Readium Web Publication Manifest](https://readium.org/webpub-manifest/)
 - [OpenSearch 1.1](https://github.com/dewitt/opensearch)
+
+## License
+
+[MIT](LICENSE) © 2026 Jeffrey T. Peckham
