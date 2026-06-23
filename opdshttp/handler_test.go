@@ -160,6 +160,78 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 }
 
+// tmplSource overrides the search template to exercise template propagation.
+type tmplSource struct {
+	memSource
+	template string
+}
+
+func (s tmplSource) SearchDescription() opds.SearchDescription {
+	return opds.SearchDescription{ShortName: "Catalog", Template: s.template}
+}
+
+// searchHrefV2 extracts the templated search href advertised in a 2.0 feed.
+func searchHrefV2(t *testing.T, h http.Handler) string {
+	t.Helper()
+	w := get(t, h, "/opds/?version=2", "")
+	var doc struct {
+		Links []struct {
+			Rel       string `json:"rel"`
+			Href      string `json:"href"`
+			Templated bool   `json:"templated"`
+		} `json:"links"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range doc.Links {
+		if l.Rel == "search" {
+			if !l.Templated {
+				t.Errorf("search link should be templated")
+			}
+			return l.Href
+		}
+	}
+	t.Fatalf("no search link in:\n%s", w.Body.String())
+	return ""
+}
+
+// Default (no template): the 2.0 link and the OpenSearch doc must advertise the
+// same parameter (q), per the search-issue.md report.
+func TestSearchParamDefaultsConsistent(t *testing.T) {
+	h := newServer()
+	if href := searchHrefV2(t, h); !strings.HasSuffix(href, "{?q}") {
+		t.Errorf("2.0 search href = %q, want suffix {?q}", href)
+	}
+	os := get(t, h, "/opds/opensearch.xml", "").Body.String()
+	if !strings.Contains(os, "q={searchTerms}") {
+		t.Errorf("opensearch doc should advertise q={searchTerms}:\n%s", os)
+	}
+}
+
+// A Source's configured template parameter name must be reflected in the 2.0
+// link (form-style), not hardcoded.
+func TestSearchTemplateHonoredV2(t *testing.T) {
+	h := opdshttp.New(
+		tmplSource{memSource{prefix: "/opds"}, "/opds/search?query={searchTerms}"},
+		opdshttp.WithPrefix("/opds"),
+	)
+	if href := searchHrefV2(t, h); href != "/opds/search{?query}" {
+		t.Errorf("2.0 search href = %q, want /opds/search{?query}", href)
+	}
+}
+
+// Multiple templated parameters become a single form-style expansion.
+func TestSearchTemplateMultiParam(t *testing.T) {
+	h := opdshttp.New(
+		tmplSource{memSource{prefix: "/opds"}, "/opds/search?q={searchTerms}&author={author}"},
+		opdshttp.WithPrefix("/opds"),
+	)
+	if href := searchHrefV2(t, h); href != "/opds/search{?q,author}" {
+		t.Errorf("2.0 search href = %q, want /opds/search{?q,author}", href)
+	}
+}
+
 func TestSearchDisabledWithoutSearcher(t *testing.T) {
 	// Wrapping in a struct that embeds only opds.Source hides the Searcher
 	// methods, so the handler must not enable search.

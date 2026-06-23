@@ -265,8 +265,10 @@ func (h *Handler) ensureLinks(r *http.Request, f *opds.Feed, v opds.Version) {
 	if h.searcher != nil && !hasRel(f.Links, opds.RelSearch) {
 		if v == opds.Version2 {
 			f.Links = append(f.Links, opds.Link{
-				Rel: opds.RelSearch, Href: h.SearchURL() + "{?query}",
-				Type: opds.MediaTypeFeed, Templated: true,
+				Rel:       opds.RelSearch,
+				Href:      searchTemplateV2(h.searcher.SearchDescription().Template, h.SearchURL()),
+				Type:      opds.MediaTypeFeed,
+				Templated: true,
 			})
 		} else {
 			f.Links = append(f.Links, opds.Link{
@@ -275,6 +277,47 @@ func (h *Handler) ensureLinks(r *http.Request, f *opds.Feed, v opds.Version) {
 			})
 		}
 	}
+}
+
+// searchTemplateV2 derives the OPDS 2.0 templated search href from the Source's
+// OpenSearch-style template (e.g. "/opds/search?q={searchTerms}"), converting it
+// to the RFC 6570 form-style expansion OPDS 2.0 uses ("/opds/search{?q}") while
+// preserving the parameter name(s) the Source chose. This keeps the 2.0 link and
+// the OpenSearch 1.x document advertising the same parameters. When no template
+// is configured it falls back to "{?q}", matching the OpenSearch default.
+func searchTemplateV2(template, fallbackPath string) string {
+	if template == "" {
+		return fallbackPath + "{?q}"
+	}
+	// Already an RFC 6570 form-style template: use it verbatim.
+	if strings.Contains(template, "{?") || strings.Contains(template, "{&") {
+		return template
+	}
+	path, query, _ := strings.Cut(template, "?")
+	keys := templatedQueryKeys(query)
+	if len(keys) == 0 {
+		keys = []string{"q"}
+	}
+	return path + "{?" + strings.Join(keys, ",") + "}"
+}
+
+// templatedQueryKeys returns, in order and without duplicates, the keys of an
+// OpenSearch-style query string whose value is a template parameter (contains a
+// "{...}" placeholder), e.g. "q={searchTerms}&author={atom:author}" -> [q author].
+func templatedQueryKeys(query string) []string {
+	var keys []string
+	seen := map[string]bool{}
+	for _, pair := range strings.Split(query, "&") {
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok || k == "" || !strings.Contains(v, "{") {
+			continue
+		}
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 func (h *Handler) negotiate(r *http.Request) opds.Version {
