@@ -93,7 +93,9 @@ type Publication struct {
 	Description string
 	// Rights is a copyright/licensing statement (atom:rights).
 	Rights string
-	// Series places the publication within a series (2.0 belongsTo.series).
+	// Series places the publication within a series. OPDS 2.0 only: it renders
+	// as belongsTo.series in JSON but is omitted from the 1.2 Atom rendering,
+	// which has no standard representation for series membership.
 	Series *Series
 
 	// Images are cover images. By convention the first is the primary cover.
@@ -153,7 +155,10 @@ type Subject struct {
 	Scheme string
 }
 
-// Series places a publication within a sequence.
+// Series places a publication within a sequence. It only appears in OPDS 2.0
+// output (belongsTo.series); the 1.2 Atom rendering drops it, so a catalog
+// wanting series information visible to 1.x clients must fold it into another
+// field (e.g. the Title or Summary).
 type Series struct {
 	// Name is the series title.
 	Name string

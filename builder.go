@@ -236,7 +236,8 @@ func (p *Publication) Describe(s string) *Publication {
 	return p
 }
 
-// PartOf places the publication in a series at the given position.
+// PartOf places the publication in a series at the given position. Series
+// membership only appears in OPDS 2.0 output; see Publication.Series.
 func (p *Publication) PartOf(series string, position float64) *Publication {
 	p.Series = &Series{Name: series, Position: position}
 	return p
