@@ -43,7 +43,10 @@ func (f *Feed) Link(rel, href, mediaType string) *Feed {
 	return f
 }
 
-// Self adds a self link.
+// Self adds a self link. Feeds served through opdshttp should usually omit it:
+// the handler injects a self link derived from the request URL, which — unlike
+// a href built from the feed id alone — carries the page parameter of a paged
+// request.
 func (f *Feed) Self(href, mediaType string) *Feed { return f.Link(RelSelf, href, mediaType) }
 
 // Start adds a start (catalog root) link.

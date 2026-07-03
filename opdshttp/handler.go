@@ -12,6 +12,12 @@
 //
 // Use FeedPath, PublicationPath and SearchPath (or the Handler's URL methods)
 // to build hrefs in your Source that match this layout.
+//
+// Feeds returned by the Source should omit their self link: the handler adds
+// one derived from the request URL, which correctly reflects the query
+// parameters (in particular ?page) of the request. A self link a Source sets
+// anyway is kept, but its href is corrected on paged requests when its page
+// parameter does not match the page served.
 package opdshttp
 
 import (
@@ -280,6 +286,11 @@ func (h *Handler) writeFeed(w http.ResponseWriter, r *http.Request, f *opds.Feed
 // Source need not repeat boilerplate on every feed, and fills the media type
 // of untyped pagination links (e.g. those added by Feed.Paged) with the feed's
 // own negotiated type.
+//
+// The injected self href is the request URI, so it carries the page parameter
+// of a paged request. A self link set by the Source with a stale or missing
+// page parameter (page 2 of a feed advertising page 1 as itself) is corrected
+// to the request URI rather than served wrong.
 func (h *Handler) ensureLinks(r *http.Request, f *opds.Feed, v opds.Version) {
 	feedType := opds.MediaTypeNavigation
 	if v == opds.Version2 {
@@ -292,8 +303,10 @@ func (h *Handler) ensureLinks(r *http.Request, f *opds.Feed, v opds.Version) {
 			f.Links[i].Type = feedType
 		}
 	}
-	if !hasRel(f.Links, opds.RelSelf) {
+	if i := indexRel(f.Links, opds.RelSelf); i < 0 {
 		f.Links = append([]opds.Link{{Rel: opds.RelSelf, Href: r.URL.RequestURI(), Type: feedType}}, f.Links...)
+	} else if p := pageParam(r); p > 1 && hrefPage(f.Links[i].Href) != p {
+		f.Links[i].Href = r.URL.RequestURI()
 	}
 	if h.searcher != nil && !hasRel(f.Links, opds.RelSearch) {
 		if v == opds.Version2 {
@@ -408,13 +421,28 @@ func isPaginationRel(rel string) bool {
 	return false
 }
 
-func hasRel(links []opds.Link, rel string) bool {
-	for _, l := range links {
+func hasRel(links []opds.Link, rel string) bool { return indexRel(links, rel) >= 0 }
+
+func indexRel(links []opds.Link, rel string) int {
+	for i, l := range links {
 		if l.Rel == rel {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+// hrefPage returns the 1-based page number an href's "page" query parameter
+// claims, defaulting to 1 when absent or unparseable (mirroring pageParam).
+func hrefPage(href string) int {
+	u, err := url.Parse(href)
+	if err != nil {
+		return 1
+	}
+	if p, err := strconv.Atoi(u.Query().Get("page")); err == nil && p > 0 {
+		return p
+	}
+	return 1
 }
 
 func pageParam(r *http.Request) int {

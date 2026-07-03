@@ -288,6 +288,63 @@ func TestHandlerFillsPaginationLinkTypes(t *testing.T) {
 	}
 }
 
+// selfSource sets its own self link, the way a Source naturally would from the
+// builder — without the page parameter of the request.
+type selfSource struct {
+	memSource
+	selfHref string
+}
+
+func (s selfSource) Feed(_ context.Context, _ opds.FeedRequest) (*opds.Feed, error) {
+	return opds.NewFeed("urn:feed:new", "New").
+		Self(s.selfHref, opds.MediaTypeNavigation), nil
+}
+
+func selfHrefV2(t *testing.T, h http.Handler, path string) string {
+	t.Helper()
+	w := get(t, h, path, opds.MediaTypeFeed)
+	var doc struct {
+		Links []struct{ Rel, Href string } `json:"links"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range doc.Links {
+		if l.Rel == "self" {
+			return l.Href
+		}
+	}
+	t.Fatalf("no self link in:\n%s", w.Body.String())
+	return ""
+}
+
+func TestSelfLinkCorrectedOnPagedRequest(t *testing.T) {
+	h := opdshttp.New(
+		selfSource{memSource{prefix: "/opds"}, "/opds/feed/new"},
+		opdshttp.WithPrefix("/opds"),
+	)
+	// Unpaged (and page 1) requests keep the Source's self link.
+	if href := selfHrefV2(t, h, "/opds/feed/new"); href != "/opds/feed/new" {
+		t.Errorf("unpaged self = %q, want /opds/feed/new", href)
+	}
+	// Page 2 must not advertise page 1 as itself.
+	if href := selfHrefV2(t, h, "/opds/feed/new?page=2"); href != "/opds/feed/new?page=2" {
+		t.Errorf("paged self = %q, want /opds/feed/new?page=2", href)
+	}
+}
+
+func TestSelfLinkWithMatchingPageKept(t *testing.T) {
+	// A self href already carrying the served page (e.g. a canonical absolute
+	// URL) is left alone.
+	h := opdshttp.New(
+		selfSource{memSource{prefix: "/opds"}, "https://example.com/opds/feed/new?page=2"},
+		opdshttp.WithPrefix("/opds"),
+	)
+	if href := selfHrefV2(t, h, "/opds/feed/new?page=2"); href != "https://example.com/opds/feed/new?page=2" {
+		t.Errorf("self = %q, want the Source's absolute href kept", href)
+	}
+}
+
 func TestSearchDisabledWithoutSearcher(t *testing.T) {
 	// Wrapping in a struct that embeds only opds.Source hides the Searcher
 	// methods, so the handler must not enable search.
