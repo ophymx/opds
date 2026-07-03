@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -229,6 +230,61 @@ func TestSearchTemplateMultiParam(t *testing.T) {
 	)
 	if href := searchHrefV2(t, h); href != "/opds/search{?q,author}" {
 		t.Errorf("2.0 search href = %q, want /opds/search{?q,author}", href)
+	}
+}
+
+func TestPagePathHelpers(t *testing.T) {
+	if got := opdshttp.FeedPagePath("/opds", "new", 1); got != "/opds/feed/new" {
+		t.Errorf("FeedPagePath page 1 = %q, want /opds/feed/new", got)
+	}
+	if got := opdshttp.FeedPagePath("/opds", "new", 3); got != "/opds/feed/new?page=3" {
+		t.Errorf("FeedPagePath page 3 = %q, want /opds/feed/new?page=3", got)
+	}
+	q := url.Values{"q": {"dune"}, "page": {"2"}}
+	if got := opdshttp.SearchPagePath("/opds", q, 3); got != "/opds/search?page=3&q=dune" {
+		t.Errorf("SearchPagePath = %q, want /opds/search?page=3&q=dune", got)
+	}
+	if got := opdshttp.SearchPagePath("/opds", q, 1); got != "/opds/search?q=dune" {
+		t.Errorf("SearchPagePath page 1 = %q, want /opds/search?q=dune", got)
+	}
+}
+
+// pagedSource serves a feed that uses Feed.Paged, leaving link types empty for
+// the handler to fill.
+type pagedSource struct{ memSource }
+
+func (s pagedSource) Feed(_ context.Context, req opds.FeedRequest) (*opds.Feed, error) {
+	p := opds.NewPublication("urn:b1", "A Book").OpenAccess("/b1.epub", "application/epub+zip")
+	return opds.NewFeed("urn:feed:new", "New").Add(*p).
+		Paged(opdshttp.FeedPath("/opds", req.ID), req.Page, true), nil
+}
+
+func TestHandlerFillsPaginationLinkTypes(t *testing.T) {
+	h := opdshttp.New(pagedSource{memSource{prefix: "/opds"}}, opdshttp.WithPrefix("/opds"))
+	w := get(t, h, "/opds/feed/new?page=2&version=2", "")
+	var doc struct {
+		Links []struct{ Rel, Href, Type string } `json:"links"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]string{}
+	hrefs := map[string]string{}
+	for _, l := range doc.Links {
+		types[l.Rel] = l.Type
+		hrefs[l.Rel] = l.Href
+	}
+	if hrefs["next"] != "/opds/feed/new?page=3" || hrefs["previous"] != "/opds/feed/new" {
+		t.Errorf("pagination hrefs = next %q, previous %q", hrefs["next"], hrefs["previous"])
+	}
+	if types["next"] != opds.MediaTypeFeed || types["previous"] != opds.MediaTypeFeed {
+		t.Errorf("pagination types = next %q, previous %q, want %q", types["next"], types["previous"], opds.MediaTypeFeed)
+	}
+
+	// The 1.2 rendering fills the acquisition feed type instead.
+	w = get(t, h, "/opds/feed/new?page=2", "")
+	if !strings.Contains(w.Body.String(), `rel="next" href="/opds/feed/new?page=3" type="`+opds.MediaTypeAcquisition+`"`) {
+		t.Errorf("1.2 next link missing or untyped:\n%s", w.Body.String())
 	}
 }
 

@@ -96,7 +96,9 @@ Both OPDS versions express the same concepts, so you build them once:
   sample, or subscribe, with prices, indirect acquisition (e.g. LCP → EPUB),
   and library-lending `availability` / `holds` / `copies`.
 - **`Facet`** / **`Group`** — filtered/sorted views and labelled sections.
-- Pagination via `Feed.Page(total, perPage, startIndex)`.
+- Pagination via `Feed.Page(total, perPage, startIndex)` for the counters and
+  `Feed.Paged(baseHref, page, hasNext)` for the prev/next links (build
+  `baseHref` with `opdshttp.FeedPagePath` / `opdshttp.SearchPagePath`).
 
 Fluent builders keep construction terse:
 

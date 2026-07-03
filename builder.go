@@ -1,6 +1,10 @@
 package opds
 
-import "time"
+import (
+	"net/url"
+	"strconv"
+	"time"
+)
 
 // This file provides fluent builders that make constructing feeds and
 // publications concise. They mutate and return the receiver, so calls chain:
@@ -73,6 +77,49 @@ func (f *Feed) Prev(href, mediaType string) *Feed { return f.Link(RelPrevious, h
 
 // Next adds a next-page link.
 func (f *Feed) Next(href, mediaType string) *Feed { return f.Link(RelNext, href, mediaType) }
+
+// Paged records the current page and adds previous/next pagination links
+// derived from baseHref, the feed's unpaged href (a query string is allowed
+// and preserved, e.g. a search href carrying its terms). A previous link is
+// added when page > 1 and a next link when hasNext; hrefs are built with
+// PageHref, so page 1 is baseHref itself. If ItemsPerPage is already set (see
+// Page), StartIndex is derived when unset. The pagination links carry no media
+// type; feeds served through opdshttp get it filled with the feed's own type.
+func (f *Feed) Paged(baseHref string, page int, hasNext bool) *Feed {
+	if page < 1 {
+		page = 1
+	}
+	f.CurrentPage = page
+	if f.ItemsPerPage > 0 && f.StartIndex == 0 {
+		f.StartIndex = (page-1)*f.ItemsPerPage + 1
+	}
+	if page > 1 {
+		f.Links = append(f.Links, Link{Rel: RelPrevious, Href: PageHref(baseHref, page-1)})
+	}
+	if hasNext {
+		f.Links = append(f.Links, Link{Rel: RelNext, Href: PageHref(baseHref, page+1)})
+	}
+	return f
+}
+
+// PageHref returns href with its "page" query parameter set to page,
+// preserving any other query parameters. For page 1 (or lower) the parameter
+// is removed instead, so the first page and the unpaged href are the same URL.
+// An unparseable href is returned unchanged.
+func PageHref(href string, page int) string {
+	u, err := url.Parse(href)
+	if err != nil {
+		return href
+	}
+	q := u.Query()
+	if page <= 1 {
+		q.Del("page")
+	} else {
+		q.Set("page", strconv.Itoa(page))
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
 
 // AddNav appends a navigation entry. rel may be empty (defaults to subsection).
 func (f *Feed) AddNav(title, href, mediaType, rel string) *Feed {

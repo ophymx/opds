@@ -17,6 +17,7 @@ package opdshttp
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -86,6 +87,23 @@ func SearchPath(prefix string) string {
 	return strings.TrimRight(prefix, "/") + "/search"
 }
 
+// FeedPagePath returns the request path for the given page of the feed with
+// the given id. Page 1 is the plain feed path.
+func FeedPagePath(prefix, id string, page int) string {
+	return opds.PageHref(FeedPath(prefix, id), page)
+}
+
+// SearchPagePath returns the request path for the given page of a search,
+// carrying over the query parameters (typically SearchRequest.Query, whose
+// existing page parameter is replaced). Page 1 carries no page parameter.
+func SearchPagePath(prefix string, query url.Values, page int) string {
+	path := SearchPath(prefix)
+	if enc := query.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	return opds.PageHref(path, page)
+}
+
 // RootURL returns the configured root path.
 func (h *Handler) RootURL() string { return h.prefix + "/" }
 
@@ -97,6 +115,14 @@ func (h *Handler) PublicationURL(id string) string { return PublicationPath(h.pr
 
 // SearchURL returns the search endpoint path under this handler's prefix.
 func (h *Handler) SearchURL() string { return SearchPath(h.prefix) }
+
+// FeedPageURL returns the path for a page of a feed id under this handler's prefix.
+func (h *Handler) FeedPageURL(id string, page int) string { return FeedPagePath(h.prefix, id, page) }
+
+// SearchPageURL returns the path for a page of a search under this handler's prefix.
+func (h *Handler) SearchPageURL(query url.Values, page int) string {
+	return SearchPagePath(h.prefix, query, page)
+}
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -251,16 +277,23 @@ func (h *Handler) writeFeed(w http.ResponseWriter, r *http.Request, f *opds.Feed
 }
 
 // ensureLinks adds self and search links to a feed when they are absent, so a
-// Source need not repeat boilerplate on every feed.
+// Source need not repeat boilerplate on every feed, and fills the media type
+// of untyped pagination links (e.g. those added by Feed.Paged) with the feed's
+// own negotiated type.
 func (h *Handler) ensureLinks(r *http.Request, f *opds.Feed, v opds.Version) {
-	if !hasRel(f.Links, opds.RelSelf) {
-		selfType := opds.MediaTypeNavigation
-		if v == opds.Version2 {
-			selfType = opds.MediaTypeFeed
-		} else if f.IsAcquisition() {
-			selfType = opds.MediaTypeAcquisition
+	feedType := opds.MediaTypeNavigation
+	if v == opds.Version2 {
+		feedType = opds.MediaTypeFeed
+	} else if f.IsAcquisition() {
+		feedType = opds.MediaTypeAcquisition
+	}
+	for i, l := range f.Links {
+		if l.Type == "" && isPaginationRel(l.Rel) {
+			f.Links[i].Type = feedType
 		}
-		f.Links = append([]opds.Link{{Rel: opds.RelSelf, Href: r.URL.RequestURI(), Type: selfType}}, f.Links...)
+	}
+	if !hasRel(f.Links, opds.RelSelf) {
+		f.Links = append([]opds.Link{{Rel: opds.RelSelf, Href: r.URL.RequestURI(), Type: feedType}}, f.Links...)
 	}
 	if h.searcher != nil && !hasRel(f.Links, opds.RelSearch) {
 		if v == opds.Version2 {
@@ -365,6 +398,14 @@ func write(w http.ResponseWriter, r *http.Request, contentType string, body []by
 		return
 	}
 	w.Write(body)
+}
+
+func isPaginationRel(rel string) bool {
+	switch rel {
+	case opds.RelNext, opds.RelPrevious, opds.RelFirst, opds.RelLast:
+		return true
+	}
+	return false
 }
 
 func hasRel(links []opds.Link, rel string) bool {

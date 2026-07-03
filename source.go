@@ -15,8 +15,9 @@ var ErrNotFound = errors.New("opds: not found")
 // content negotiation, and HTTP wiring.
 //
 // Implementations are responsible for the URLs (hrefs) they place in feeds:
-// the library does not rewrite them. Use FeedRequest.PageURL and the BaseURL to
-// build consistent links, or construct them however suits the backend.
+// the library does not rewrite them. Use Feed.Paged with a base href built
+// from the opdshttp path helpers (FeedPath, FeedPagePath, SearchPagePath) to
+// emit pagination links, or construct hrefs however suits the backend.
 type Source interface {
 	// Root returns the catalog's root feed (usually a navigation feed).
 	Root(ctx context.Context, req FeedRequest) (*Feed, error)
