@@ -13,6 +13,7 @@ type atomFeed struct {
 	XmlnsDCTerms string   `xml:"xmlns:dcterms,attr"`
 	XmlnsOS      string   `xml:"xmlns:opensearch,attr"`
 	XmlnsThr     string   `xml:"xmlns:thr,attr"`
+	XmlnsPSE     string   `xml:"xmlns:pse,attr,omitempty"`
 
 	ID       string       `xml:"id"`
 	Title    string       `xml:"title"`
@@ -35,6 +36,7 @@ type entryDoc struct {
 	Xmlns        string   `xml:"xmlns,attr"`
 	XmlnsOPDS    string   `xml:"xmlns:opds,attr"`
 	XmlnsDCTerms string   `xml:"xmlns:dcterms,attr"`
+	XmlnsPSE     string   `xml:"xmlns:pse,attr,omitempty"`
 	atomEntry
 }
 
@@ -82,6 +84,12 @@ type atomLink struct {
 	FacetGroup  string   `xml:"opds:facetGroup,attr,omitempty"`
 	ActiveFacet string   `xml:"opds:activeFacet,attr,omitempty"`
 	Count       *int     `xml:"thr:count,attr,omitempty"`
+
+	// OPDS-PSE stream link attributes. PSECount is a pointer so the required
+	// pse:count is emitted even when zero, but omitted from non-PSE links.
+	PSECount        *int   `xml:"pse:count,attr,omitempty"`
+	PSELastRead     *int   `xml:"pse:lastRead,attr,omitempty"`
+	PSELastReadDate string `xml:"pse:lastReadDate,attr,omitempty"`
 
 	Prices       []atomPrice       `xml:"opds:price,omitempty"`
 	Indirect     []atomIndirect    `xml:"opds:indirectAcquisition,omitempty"`

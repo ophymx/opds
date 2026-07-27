@@ -3,6 +3,7 @@ package opdshttp_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -372,6 +373,81 @@ func TestHandlerDoesNotMutateSourceFeed(t *testing.T) {
 	body := get(t, h, "/opds/", "").Body.String()
 	if !strings.Contains(body, `href="/opds/opensearch.xml"`) {
 		t.Errorf("1.2 feed missing OpenSearch link:\n%s", body)
+	}
+}
+
+// pageSource serves one-page-per-byte "images" so tests can verify which page
+// was requested and how the width hint was parsed.
+type pageSource struct{ memSource }
+
+func (s pageSource) Page(_ context.Context, req opds.PageRequest) (*opds.PageImage, error) {
+	if req.ID != "c1" || req.Number >= 3 {
+		return nil, opds.ErrNotFound
+	}
+	body := strings.NewReader(fmt.Sprintf("page %d width %d", req.Number, req.MaxWidth))
+	return &opds.PageImage{Type: "image/jpeg", Content: body}, nil
+}
+
+func newPageServer() *opdshttp.Handler {
+	return opdshttp.New(pageSource{memSource{prefix: "/opds"}}, opdshttp.WithPrefix("/opds"))
+}
+
+func TestPageStreamServesPages(t *testing.T) {
+	w := get(t, newPageServer(), "/opds/page/c1?page=2&width=1404", "")
+	if w.Code != 200 {
+		t.Fatalf("code = %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "image/jpeg" {
+		t.Errorf("content-type = %q, want image/jpeg", ct)
+	}
+	if body := w.Body.String(); body != "page 2 width 1404" {
+		t.Errorf("body = %q", body)
+	}
+}
+
+func TestPageStreamParamDefaults(t *testing.T) {
+	// No page parameter means page 0; a literal unexpanded {maxWidth} token
+	// (from a client that does not support it) means width unspecified.
+	w := get(t, newPageServer(), "/opds/page/c1?width=%7BmaxWidth%7D", "")
+	if body := w.Body.String(); body != "page 0 width 0" {
+		t.Errorf("body = %q, want page 0 width 0", body)
+	}
+}
+
+func TestPageStreamBadPageNumber(t *testing.T) {
+	for _, path := range []string{
+		"/opds/page/c1?page=%7BpageNumber%7D", // unexpanded token
+		"/opds/page/c1?page=-1",
+	} {
+		if w := get(t, newPageServer(), path, ""); w.Code != 400 {
+			t.Errorf("GET %s code = %d, want 400", path, w.Code)
+		}
+	}
+}
+
+func TestPageStreamNotFound(t *testing.T) {
+	if w := get(t, newPageServer(), "/opds/page/c1?page=3", ""); w.Code != 404 {
+		t.Errorf("out-of-range page code = %d, want 404", w.Code)
+	}
+	if w := get(t, newPageServer(), "/opds/page/missing", ""); w.Code != 404 {
+		t.Errorf("unknown publication code = %d, want 404", w.Code)
+	}
+}
+
+func TestPageStreamDisabledWithoutPageSource(t *testing.T) {
+	// memSource does not implement opds.PageSource.
+	if w := get(t, newServer(), "/opds/page/c1?page=0", ""); w.Code != 404 {
+		t.Errorf("code = %d, want 404 without PageSource", w.Code)
+	}
+}
+
+func TestPageStreamPathTemplate(t *testing.T) {
+	want := "/opds/page/c1?page={pageNumber}&width={maxWidth}"
+	if got := opdshttp.PageStreamPath("/opds", "c1"); got != want {
+		t.Errorf("PageStreamPath = %q, want %q", got, want)
+	}
+	if got := newPageServer().PageStreamURL("c1"); got != want {
+		t.Errorf("PageStreamURL = %q, want %q", got, want)
 	}
 }
 

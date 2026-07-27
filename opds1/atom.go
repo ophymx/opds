@@ -41,6 +41,9 @@ func MarshalEntry(p *opds.Publication) ([]byte, error) {
 		XmlnsOPDS:    opds.NSOPDS,
 		XmlnsDCTerms: opds.NSDCTerms,
 	}
+	if p.PageStream != nil {
+		doc.XmlnsPSE = opds.NSPSE
+	}
 	return marshal(doc)
 }
 
@@ -69,6 +72,9 @@ func buildFeed(f *opds.Feed) atomFeed {
 		Updated:      formatTime(updated),
 		Icon:         f.Icon,
 		Authors:      buildAuthors(f.Authors),
+	}
+	if usesPageStream(f) {
+		doc.XmlnsPSE = opds.NSPSE
 	}
 
 	for _, l := range f.Links {
@@ -174,7 +180,45 @@ func buildEntry(p opds.Publication, feedUpdated time.Time) atomEntry {
 	for _, a := range p.Acquisitions {
 		e.Links = append(e.Links, buildAcquisition(a))
 	}
+	if p.PageStream != nil {
+		e.Links = append(e.Links, buildPageStream(*p.PageStream))
+	}
 	return e
+}
+
+func buildPageStream(ps opds.PageStream) atomLink {
+	l := atomLink{
+		Rel:  opds.RelPageStream,
+		Href: ps.Href,
+		Type: ps.Type,
+		// pse:count is required: KOReader renders only the first page without it.
+		PSECount: new(ps.PageCount),
+	}
+	// lastReadDate qualifies lastRead, so neither is emitted without a page.
+	if ps.LastRead > 0 {
+		l.PSELastRead = new(ps.LastRead)
+		l.PSELastReadDate = formatTimeOrEmpty(ps.LastReadDate)
+	}
+	return l
+}
+
+// usesPageStream reports whether any publication in the feed (including group
+// members) carries a PSE stream link, so the pse namespace is declared only on
+// feeds that need it.
+func usesPageStream(f *opds.Feed) bool {
+	for _, p := range f.Publications {
+		if p.PageStream != nil {
+			return true
+		}
+	}
+	for _, g := range f.Groups {
+		for _, p := range g.Publications {
+			if p.PageStream != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func buildImage(img opds.Image) atomLink {

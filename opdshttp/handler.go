@@ -9,9 +9,10 @@
 //	{prefix}/publication/{id} a single publication document
 //	{prefix}/search           search results (if the Source is an opds.Searcher)
 //	{prefix}/opensearch.xml   the OpenSearch description document
+//	{prefix}/page/{id}        a single page image (if the Source is an opds.PageSource)
 //
-// Use FeedPath, PublicationPath and SearchPath (or the Handler's URL methods)
-// to build hrefs in your Source that match this layout.
+// Use FeedPath, PublicationPath, SearchPath and PageStreamPath (or the
+// Handler's URL methods) to build hrefs in your Source that match this layout.
 //
 // Feeds returned by the Source should omit their self link: the handler adds
 // one derived from the request URL, which correctly reflects the query
@@ -26,6 +27,7 @@ package opdshttp
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -42,6 +44,7 @@ import (
 type Handler struct {
 	src            opds.Source
 	searcher       opds.Searcher
+	pages          opds.PageSource
 	prefix         string
 	defaultVersion opds.Version
 	errorHandler   func(http.ResponseWriter, *http.Request, error)
@@ -71,11 +74,15 @@ func WithErrorHandler(fn func(http.ResponseWriter, *http.Request, error)) Option
 
 // New returns a Handler serving src. If src also implements opds.Searcher,
 // search and OpenSearch endpoints are enabled and a search link is advertised
-// in feeds automatically.
+// in feeds automatically. If src also implements opds.PageSource, the
+// page-image endpoint behind OPDS-PSE stream links is enabled.
 func New(src opds.Source, opts ...Option) *Handler {
 	h := &Handler{src: src, defaultVersion: opds.Version1}
 	if s, ok := src.(opds.Searcher); ok {
 		h.searcher = s
+	}
+	if p, ok := src.(opds.PageSource); ok {
+		h.pages = p
 	}
 	for _, o := range opts {
 		o(h)
@@ -96,6 +103,15 @@ func PublicationPath(prefix, id string) string {
 // SearchPath returns the request path for the search endpoint.
 func SearchPath(prefix string) string {
 	return strings.TrimRight(prefix, "/") + "/search"
+}
+
+// PageStreamPath returns the OPDS-PSE href template for streaming the pages of
+// the publication with the given id, carrying the {pageNumber} and {maxWidth}
+// tokens clients substitute (see opds.Publication.Stream). The template is
+// valid even when the PageSource ignores PageRequest.MaxWidth: the width
+// parameter is simply unused.
+func PageStreamPath(prefix, id string) string {
+	return strings.TrimRight(prefix, "/") + "/page/" + id + "?page={pageNumber}&width={maxWidth}"
 }
 
 // FeedPagePath returns the request path for the given page of the feed with
@@ -127,6 +143,10 @@ func (h *Handler) PublicationURL(id string) string { return PublicationPath(h.pr
 // SearchURL returns the search endpoint path under this handler's prefix.
 func (h *Handler) SearchURL() string { return SearchPath(h.prefix) }
 
+// PageStreamURL returns the OPDS-PSE href template for a publication id under
+// this handler's prefix.
+func (h *Handler) PageStreamURL(id string) string { return PageStreamPath(h.prefix, id) }
+
 // FeedPageURL returns the path for a page of a feed id under this handler's prefix.
 func (h *Handler) FeedPageURL(id string, page int) string { return FeedPagePath(h.prefix, id, page) }
 
@@ -156,6 +176,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.servePublication(w, r, strings.TrimPrefix(rest, "publication/"))
 	case strings.HasPrefix(rest, "feed/"):
 		h.serveFeed(w, r, strings.TrimPrefix(rest, "feed/"))
+	case strings.HasPrefix(rest, "page/"):
+		h.servePage(w, r, strings.TrimPrefix(rest, "page/"))
 	default:
 		http.NotFound(w, r)
 	}
@@ -228,6 +250,61 @@ func (h *Handler) serveSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeFeed(w, r, feed, v)
+}
+
+func (h *Handler) servePage(w http.ResponseWriter, r *http.Request, id string) {
+	if h.pages == nil {
+		http.NotFound(w, r)
+		return
+	}
+	q := r.URL.Query()
+	number, ok := pageNumberParam(q.Get("page"))
+	if !ok {
+		http.Error(w, "invalid page number", http.StatusBadRequest)
+		return
+	}
+	img, err := h.pages.Page(r.Context(), opds.PageRequest{
+		ID:       id,
+		Number:   number,
+		MaxWidth: widthParam(q.Get("width")),
+		Query:    q,
+	})
+	if err != nil {
+		h.handleError(w, r, err)
+		return
+	}
+	if c, ok := img.Content.(io.Closer); ok {
+		defer c.Close()
+	}
+	w.Header().Set("Content-Type", img.Type)
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	io.Copy(w, img.Content)
+}
+
+// pageNumberParam parses the zero-based PSE page number. An absent parameter
+// means the first page; a malformed or negative value is rejected.
+func pageNumberParam(s string) (int, bool) {
+	if s == "" {
+		return 0, true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// widthParam parses the expanded {maxWidth} token. Clients that do not
+// support the token pass it through literally, so anything unparseable means
+// "unspecified" rather than an error.
+func widthParam(s string) int {
+	if n, err := strconv.Atoi(s); err == nil && n > 0 {
+		return n
+	}
+	return 0
 }
 
 func (h *Handler) serveOpenSearch(w http.ResponseWriter, r *http.Request) {
@@ -363,7 +440,7 @@ func searchTemplateV2(template, fallbackPath string) string {
 func templatedQueryKeys(query string) []string {
 	var keys []string
 	seen := map[string]bool{}
-	for _, pair := range strings.Split(query, "&") {
+	for pair := range strings.SplitSeq(query, "&") {
 		k, v, ok := strings.Cut(pair, "=")
 		if !ok || k == "" || !strings.Contains(v, "{") {
 			continue

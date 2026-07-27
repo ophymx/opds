@@ -287,6 +287,32 @@ func (p *Publication) Sample(href, mediaType string) *Publication {
 	return p.Acquire(Acquisition{Rel: AcquireSample, Href: href, Type: mediaType})
 }
 
+// Stream advertises OPDS-PSE page streaming (1.x only; see PageStream).
+// hrefTemplate must contain {pageNumber} and may contain {maxWidth};
+// opdshttp.PageStreamPath builds a template matching that package's routing.
+// A LastRead recorded earlier is kept.
+func (p *Publication) Stream(hrefTemplate, mediaType string, pageCount int) *Publication {
+	ps := p.pageStream()
+	ps.Href, ps.Type, ps.PageCount = hrefTemplate, mediaType, pageCount
+	return p
+}
+
+// LastRead records the 1-based last page read and when, for server-side resume
+// (PSE 1.2; see PageStream). Pass a zero time if the date is unknown. The
+// publication must also be given a stream link via Stream (in either order).
+func (p *Publication) LastRead(page int, at time.Time) *Publication {
+	ps := p.pageStream()
+	ps.LastRead, ps.LastReadDate = page, at
+	return p
+}
+
+func (p *Publication) pageStream() *PageStream {
+	if p.PageStream == nil {
+		p.PageStream = &PageStream{}
+	}
+	return p.PageStream
+}
+
 // Link adds an arbitrary link to the publication.
 func (p *Publication) Link(rel, href, mediaType string) *Publication {
 	p.Links = append(p.Links, Link{Rel: rel, Href: href, Type: mediaType})

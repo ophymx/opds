@@ -103,8 +103,34 @@ type Publication struct {
 	// Acquisitions are the ways the publication can be acquired. An acquisition
 	// feed entry should have at least one.
 	Acquisitions []Acquisition
+	// PageStream advertises page-by-page image streaming (OPDS-PSE). OPDS 1.x
+	// only: the extension has no 2.0 mapping, so the opds2 encoder omits it and
+	// clients fall back to the acquisition links.
+	PageStream *PageStream
 	// Links are additional links (self, alternate to the full entry, related, ...).
 	Links []Link
+}
+
+// PageStream describes page-by-page image streaming of a publication per the
+// OPDS Page Streaming Extension (OPDS-PSE), used by comic/manga clients such
+// as KOReader to fetch one page at a time instead of downloading the whole
+// publication. See https://anansi-project.github.io/docs/opds-pse/intro.
+type PageStream struct {
+	// Href is the URL template for fetching a single page. It must contain the
+	// token {pageNumber} (pages are numbered 0 to PageCount-1) and may contain
+	// {maxWidth}, which clients replace with their maximum desired image width.
+	Href string
+	// Type is the media type of the page images: image/jpeg, image/png or
+	// image/gif.
+	Type string
+	// PageCount is the total number of pages. Required: clients such as
+	// KOReader render only the first page when the count is missing.
+	PageCount int
+	// LastRead is the 1-based number of the last page read, for server-side
+	// resume (PSE 1.2). Zero means unknown and is omitted.
+	LastRead int
+	// LastReadDate is when LastRead was recorded (PSE 1.2). Optional.
+	LastReadDate time.Time
 }
 
 // Link is a generic hypermedia link.

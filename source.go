@@ -3,6 +3,7 @@ package opds
 import (
 	"context"
 	"errors"
+	"io"
 	"net/url"
 )
 
@@ -42,6 +43,38 @@ type Searcher interface {
 	// SearchDescription returns metadata describing the search interface,
 	// used to generate the OpenSearch document and the 2.0 search link.
 	SearchDescription() SearchDescription
+}
+
+// PageSource is an optional interface a Source may also implement to serve the
+// single-page images behind OPDS-PSE stream links (see PageStream). When
+// present, the HTTP layer routes page-image requests to it.
+type PageSource interface {
+	// Page returns one page image of a publication. It should return
+	// ErrNotFound when the publication or page does not exist.
+	Page(ctx context.Context, req PageRequest) (*PageImage, error)
+}
+
+// PageRequest carries the parameters of a request for a single page image.
+type PageRequest struct {
+	// ID identifies the publication, as placed in the stream href by the Source.
+	ID string
+	// Number is the zero-based page number (the expanded {pageNumber} token).
+	Number int
+	// MaxWidth is the client's maximum desired image width in pixels (the
+	// expanded {maxWidth} token), or 0 if unspecified. Implementations may
+	// ignore it and serve the full-size image.
+	MaxWidth int
+	// Query holds the raw query parameters of the request.
+	Query url.Values
+}
+
+// PageImage is a single page image returned by a PageSource.
+type PageImage struct {
+	// Type is the image media type (e.g. "image/jpeg").
+	Type string
+	// Content is the image data. The HTTP layer closes it after serving when
+	// it implements io.Closer.
+	Content io.Reader
 }
 
 // FeedRequest carries the parameters of a request for a feed.

@@ -2,6 +2,8 @@ package opds1
 
 import (
 	"encoding/xml"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +94,143 @@ func TestMarshalEntry(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `rel="http://opds-spec.org/acquisition/open-access"`) {
 		t.Errorf("entry missing acquisition link:\n%s", b)
+	}
+}
+
+func TestPageStream(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	p := opds.NewPublication("urn:comic:1", "Comic #1").By("Artist").UpdatedAt(ts).
+		OpenAccess("/dl/1.cbz", "application/vnd.comicbook+zip").
+		Stream("/opds/page/1?page={pageNumber}&width={maxWidth}", "image/jpeg", 35).
+		LastRead(10, ts)
+	f := opds.NewFeed("urn:feed:comics", "Comics").At(ts).Add(*p)
+	b, err := Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(b)
+	wants := []string{
+		`xmlns:pse="http://vaemendis.net/opds-pse/ns"`,
+		`rel="http://vaemendis.net/opds-pse/stream"`,
+		`href="/opds/page/1?page={pageNumber}&amp;width={maxWidth}"`,
+		`type="image/jpeg"`,
+		`pse:count="35"`,
+		`pse:lastRead="10"`,
+		`pse:lastReadDate="2026-01-02T03:04:05Z"`,
+	}
+	for _, w := range wants {
+		if !strings.Contains(out, w) {
+			t.Errorf("output missing %q\n---\n%s", w, out)
+		}
+	}
+}
+
+func TestPageStreamCountEmittedWhenZero(t *testing.T) {
+	// pse:count is required by the spec (and by KOReader, which otherwise
+	// renders only the first page), so even a zero count must appear.
+	p := opds.NewPublication("urn:comic:1", "Comic").Stream("/p?page={pageNumber}", "image/jpeg", 0)
+	f := opds.NewFeed("urn:feed:comics", "Comics").Add(*p)
+	b, err := Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `pse:count="0"`) {
+		t.Errorf("pse:count missing for zero page count:\n%s", b)
+	}
+	if strings.Contains(string(b), "pse:lastRead") {
+		t.Errorf("lastRead attributes should be omitted when unset:\n%s", b)
+	}
+}
+
+func TestPSENamespaceOnlyWhenUsed(t *testing.T) {
+	b, err := Marshal(sampleFeed())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "xmlns:pse") {
+		t.Errorf("pse namespace declared on a feed without stream links:\n%s", b)
+	}
+
+	e, err := MarshalEntry(opds.NewPublication("urn:b1", "Book"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(e), "xmlns:pse") {
+		t.Errorf("pse namespace declared on an entry without a stream link:\n%s", e)
+	}
+}
+
+func TestPageStreamEntryDocument(t *testing.T) {
+	p := opds.NewPublication("urn:comic:1", "Comic").
+		Stream("/opds/page/1?page={pageNumber}", "image/jpeg", 12)
+	b, err := MarshalEntry(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(b)
+	for _, w := range []string{
+		`xmlns:pse="http://vaemendis.net/opds-pse/ns"`,
+		`pse:count="12"`,
+	} {
+		if !strings.Contains(out, w) {
+			t.Errorf("entry document missing %q\n---\n%s", w, out)
+		}
+	}
+}
+
+func TestPSENamespaceForGroupedPublications(t *testing.T) {
+	p := opds.NewPublication("urn:comic:1", "Comic").
+		Stream("/opds/page/1?page={pageNumber}", "image/jpeg", 12)
+	f := opds.NewFeed("urn:feed:home", "Home")
+	f.AddGroup(opds.Group{Title: "Comics", Publications: []opds.Publication{*p}})
+	b, err := Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `xmlns:pse=`) {
+		t.Errorf("pse namespace missing for stream link inside a group:\n%s", b)
+	}
+}
+
+// TestGoldenPageStreamFeed locks the exact serialization of a PSE-bearing
+// acquisition feed against testdata/pse_feed.xml. Regenerate the golden file
+// after an intentional encoding change with:
+//
+//	OPDS_UPDATE_GOLDEN=1 go test ./opds1 -run TestGoldenPageStreamFeed
+func TestGoldenPageStreamFeed(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	comic := opds.NewPublication("urn:comic:vol1", "Example Comic, Vol. 1").
+		By("Example Artist").In("en").UpdatedAt(ts).
+		Summarize("An example comic.").
+		Cover("/covers/vol1.jpg", "image/jpeg").
+		Thumbnail("/covers/vol1-t.jpg", "image/jpeg").
+		OpenAccess("/dl/vol1.cbz", "application/vnd.comicbook+zip").
+		Stream("/opds/page/vol1?page={pageNumber}&width={maxWidth}", "image/jpeg", 35).
+		LastRead(10, ts)
+	unread := opds.NewPublication("urn:comic:vol2", "Example Comic, Vol. 2").
+		By("Example Artist").In("en").UpdatedAt(ts).
+		OpenAccess("/dl/vol2.cbz", "application/vnd.comicbook+zip").
+		Stream("/opds/page/vol2?page={pageNumber}&width={maxWidth}", "image/jpeg", 42)
+	f := opds.NewFeed("urn:feed:comics", "Comics").At(ts).
+		Self("/opds/feed/comics", opds.MediaTypeAcquisition).Start("/opds/").
+		Add(*comic, *unread)
+
+	b, err := Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := filepath.Join("testdata", "pse_feed.xml")
+	if os.Getenv("OPDS_UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(golden, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != string(want) {
+		t.Errorf("output differs from %s\n--- got ---\n%s\n--- want ---\n%s", golden, b, want)
 	}
 }
 

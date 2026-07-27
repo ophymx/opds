@@ -2,6 +2,7 @@ package opds2
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,5 +114,20 @@ func TestSubjectStringForm(t *testing.T) {
 	subj := doc["metadata"].(map[string]any)["subject"].([]any)
 	if subj[0] != "Fiction" {
 		t.Errorf("bare subject should marshal as string, got %T %v", subj[0], subj[0])
+	}
+}
+
+// TestPageStreamOmitted documents that OPDS-PSE has no 2.0 mapping: the JSON
+// rendering must not invent one, so clients fall back to acquisition links.
+func TestPageStreamOmitted(t *testing.T) {
+	p := opds.NewPublication("urn:comic:1", "Comic").
+		OpenAccess("/dl/1.cbz", "application/vnd.comicbook+zip").
+		Stream("/opds/page/1?page={pageNumber}", "image/jpeg", 35)
+	b, err := MarshalPublication(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "vaemendis") || strings.Contains(string(b), "pageNumber") {
+		t.Errorf("PSE fields leaked into the 2.0 rendering:\n%s", b)
 	}
 }

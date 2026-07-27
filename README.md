@@ -149,6 +149,40 @@ func (catalog) SearchDescription() opds.SearchDescription {
 }
 ```
 
+## Page streaming (OPDS-PSE)
+
+For comics and manga, the [OPDS Page Streaming
+Extension](https://anansi-project.github.io/docs/opds-pse/intro) lets clients
+such as KOReader fetch one page image at a time instead of downloading a whole
+CBZ. Advertise a stream on a publication with `Stream` (and optionally
+`LastRead` for server-side resume, PSE 1.2):
+
+```go
+comic := opds.NewPublication("urn:comic:vol1", "Vol. 1").
+	OpenAccess("/dl/vol1.cbz", "application/vnd.comicbook+zip").
+	Stream(h.PageStreamURL("vol1"), "image/jpeg", 35). // 35 pages
+	LastRead(10, lastReadAt)                           // resume at page 10
+```
+
+If your `Source` also implements `opds.PageSource`, the handler serves the
+page images behind the template that `PageStreamURL` / `PageStreamPath`
+builds (`{prefix}/page/{id}?page={pageNumber}&width={maxWidth}`):
+
+```go
+func (catalog) Page(_ context.Context, req opds.PageRequest) (*opds.PageImage, error) {
+	img, err := openPage(req.ID, req.Number) // req.Number is zero-based
+	if err != nil {
+		return nil, opds.ErrNotFound
+	}
+	return &opds.PageImage{Type: "image/jpeg", Content: img}, nil
+}
+```
+
+`req.MaxWidth` carries the client's desired maximum width; implementations may
+ignore it and serve full-size images. PSE is an OPDS **1.x** extension with no
+2.0 mapping: the `opds2` encoder omits it and 2.0 clients fall back to the
+acquisition links.
+
 ## Content negotiation
 
 The handler picks the version per request, in priority order:
@@ -170,6 +204,7 @@ The handler picks the version per request, in priority order:
 {prefix}/publication/{id}  a single publication document
 {prefix}/search            search results
 {prefix}/opensearch.xml    OpenSearch description
+{prefix}/page/{id}         a page image (OPDS-PSE, if the Source is a PageSource)
 ```
 
 ## Using the encoders directly
@@ -213,6 +248,12 @@ Vendored schema provenance (and the one documented upstream-typo fix in
 - Acquisition model including prices, nested indirect acquisition, and library
   lending (availability/holds/copies).
 - Facets, groups, pagination, OpenSearch.
+- Page streaming for comics/manga via
+  [OPDS-PSE](https://anansi-project.github.io/docs/opds-pse/intro) 1.2
+  (`pse:count`, `pse:lastRead`, `pse:lastReadDate`) — 1.x feeds only, like the
+  extension itself. The stream link's templated href (`{pageNumber}`)
+  necessarily goes beyond Atom's strict URI datatype; the conformance tests
+  document that this is the extension's only deviation.
 
 A note on **library lending in 1.2**: `opds:availability`/`holds`/`copies` are
 standard in OPDS 2.0 but are *not* part of the official OPDS 1.2 RELAX NG schema
@@ -227,6 +268,7 @@ for it). Contributions welcome.
 
 - [OPDS 1.2 specification](https://specs.opds.io/opds-1.2)
 - [OPDS 2.0 specification](https://drafts.opds.io/opds-2.0)
+- [OPDS-PSE specification](https://anansi-project.github.io/docs/opds-pse/specs/v1.2)
 - [Readium Web Publication Manifest](https://readium.org/webpub-manifest/)
 - [OpenSearch 1.1](https://github.com/dewitt/opensearch)
 

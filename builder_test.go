@@ -1,6 +1,31 @@
 package opds
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestStreamBuilder(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	p := NewPublication("urn:comic:1", "Comic").
+		Stream("/opds/page/1?page={pageNumber}", "image/jpeg", 35).
+		LastRead(10, ts)
+	want := PageStream{
+		Href: "/opds/page/1?page={pageNumber}", Type: "image/jpeg",
+		PageCount: 35, LastRead: 10, LastReadDate: ts,
+	}
+	if p.PageStream == nil || *p.PageStream != want {
+		t.Errorf("PageStream = %+v, want %+v", p.PageStream, want)
+	}
+
+	// LastRead before Stream must yield the same descriptor.
+	p = NewPublication("urn:comic:1", "Comic").
+		LastRead(10, ts).
+		Stream("/opds/page/1?page={pageNumber}", "image/jpeg", 35)
+	if p.PageStream == nil || *p.PageStream != want {
+		t.Errorf("PageStream (LastRead first) = %+v, want %+v", p.PageStream, want)
+	}
+}
 
 func TestPageHref(t *testing.T) {
 	cases := []struct {

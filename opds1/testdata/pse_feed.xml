@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:thr="http://purl.org/syndication/thread/1.0" xmlns:pse="http://vaemendis.net/opds-pse/ns">
+  <id>urn:feed:comics</id>
+  <title>Comics</title>
+  <updated>2026-01-02T03:04:05Z</updated>
+  <link rel="self" href="/opds/feed/comics" type="application/atom+xml;profile=opds-catalog;kind=acquisition"></link>
+  <link rel="start" href="/opds/" type="application/atom+xml;profile=opds-catalog;kind=navigation"></link>
+  <entry>
+    <id>urn:comic:vol1</id>
+    <title>Example Comic, Vol. 1</title>
+    <updated>2026-01-02T03:04:05Z</updated>
+    <author>
+      <name>Example Artist</name>
+    </author>
+    <dcterms:language>en</dcterms:language>
+    <summary type="text">An example comic.</summary>
+    <link rel="http://opds-spec.org/image" href="/covers/vol1.jpg" type="image/jpeg"></link>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/covers/vol1-t.jpg" type="image/jpeg"></link>
+    <link rel="http://opds-spec.org/acquisition/open-access" href="/dl/vol1.cbz" type="application/vnd.comicbook+zip"></link>
+    <link rel="http://vaemendis.net/opds-pse/stream" href="/opds/page/vol1?page={pageNumber}&amp;width={maxWidth}" type="image/jpeg" pse:count="35" pse:lastRead="10" pse:lastReadDate="2026-01-02T03:04:05Z"></link>
+  </entry>
+  <entry>
+    <id>urn:comic:vol2</id>
+    <title>Example Comic, Vol. 2</title>
+    <updated>2026-01-02T03:04:05Z</updated>
+    <author>
+      <name>Example Artist</name>
+    </author>
+    <dcterms:language>en</dcterms:language>
+    <link rel="http://opds-spec.org/acquisition/open-access" href="/dl/vol2.cbz" type="application/vnd.comicbook+zip"></link>
+    <link rel="http://vaemendis.net/opds-pse/stream" href="/opds/page/vol2?page={pageNumber}&amp;width={maxWidth}" type="image/jpeg" pse:count="42"></link>
+  </entry>
+</feed>

@@ -98,6 +98,43 @@ func TestConformanceEntryDocument(t *testing.T) {
 	mustValid(t, b)
 }
 
+// TestConformancePageStreamAttributes checks that the pse:* attributes on a
+// stream link are schema-clean: Atom permits foreign-namespaced attributes on
+// link, so a stream link whose href carries no substitution tokens validates.
+func TestConformancePageStreamAttributes(t *testing.T) {
+	f := coreFeed()
+	f.Publications[0].
+		Stream("/opds/page/gopl", "image/jpeg", 35).
+		LastRead(10, at())
+	b, err := Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustValid(t, b)
+}
+
+// TestConformancePageStreamHrefIsExtension documents the one schema violation
+// inherent to OPDS-PSE: the mandatory {pageNumber} (and optional {maxWidth})
+// tokens make the stream link's href an invalid URI per Atom's strict href
+// datatype. Every real PSE feed (Komga's included) shares this, and clients
+// accept it. The test confirms that href is the ONLY reason a PSE feed fails
+// strict validation.
+func TestConformancePageStreamHrefIsExtension(t *testing.T) {
+	jar := findJing(t)
+	f := coreFeed()
+	f.Publications[0].Stream("/opds/page/gopl?page={pageNumber}&width={maxWidth}", "image/jpeg", 35)
+	b, _ := Marshal(f)
+	out, ok := jingValidate(t, jar, b)
+	if ok {
+		t.Skip("schema now accepts templated hrefs; revisit this test")
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		if strings.Contains(line, "error:") && !strings.Contains(line, `value of attribute "href" is invalid`) {
+			t.Errorf("unexpected non-href validation error:\n%s\n---\n%s", line, b)
+		}
+	}
+}
+
 // TestConformanceLendingIsExtension documents the boundary of the official OPDS
 // 1.2 schema: library-lending elements (opds:availability/holds/copies) are NOT
 // part of core 1.2 (they are standard only in OPDS 2.0, and a de-facto 1.x

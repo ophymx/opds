@@ -25,6 +25,8 @@ const (
 	NSDCTerms    = "http://purl.org/dc/terms/"
 	NSOpenSearch = "http://a9.com/-/spec/opensearch/1.1/"
 	NSThreading  = "http://purl.org/syndication/thread/1.0"
+	// NSPSE is the OPDS Page Streaming Extension namespace (see PageStream).
+	NSPSE = "http://vaemendis.net/opds-pse/ns"
 )
 
 // Standard (RFC 5988 / Atom) and OPDS-specific link relations.
@@ -48,6 +50,9 @@ const (
 
 	RelImage     = "http://opds-spec.org/image"
 	RelThumbnail = "http://opds-spec.org/image/thumbnail"
+
+	// RelPageStream is the OPDS-PSE page streaming relation (see PageStream).
+	RelPageStream = "http://vaemendis.net/opds-pse/stream"
 
 	RelFacet         = "http://opds-spec.org/facet"
 	RelGroup         = "http://opds-spec.org/group"
