@@ -12,7 +12,10 @@ serializes it to either supported wire format, chosen by content negotiation:
 | **OPDS 1.2** | Atom (XML) | stable, universal | Calibre, KOReader, Thorium, FBReader, Foliate, Aldiko, Moon+, … |
 | **OPDS 2.0** | JSON (Readium Web Publication Manifest) | current draft | Thorium, Readium toolkits, Palace/SimplyE, newer apps |
 
-Zero dependencies — only the Go standard library.
+No runtime dependencies — the library itself uses only the Go standard
+library. (A single test-only dependency,
+[`santhosh-tekuri/jsonschema`](https://github.com/santhosh-tekuri/jsonschema),
+powers the OPDS 2.0 conformance tests; it never appears in your builds.)
 
 ## Install
 
