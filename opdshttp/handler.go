@@ -18,12 +18,17 @@
 // parameters (in particular ?page) of the request. A self link a Source sets
 // anyway is kept, but its href is corrected on paged requests when its page
 // parameter does not match the page served.
+//
+// The handler never mutates the feed a Source returns — links it injects are
+// added to a per-request copy — so a Source may safely return a shared or
+// cached *opds.Feed from concurrent requests.
 package opdshttp
 
 import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -258,6 +263,11 @@ func (h *Handler) feedRequest(r *http.Request, id string, v opds.Version) opds.F
 }
 
 func (h *Handler) writeFeed(w http.ResponseWriter, r *http.Request, f *opds.Feed, v opds.Version) {
+	// Work on a copy with its own Links slice: ensureLinks adds and rewrites
+	// links, and the Source's feed may be shared (e.g. cached) across requests.
+	feed := *f
+	feed.Links = slices.Clone(f.Links)
+	f = &feed
 	h.ensureLinks(r, f, v)
 	var (
 		body []byte

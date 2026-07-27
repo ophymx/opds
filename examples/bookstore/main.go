@@ -106,7 +106,8 @@ func (c catalog) SearchDescription() opds.SearchDescription {
 }
 
 func buildFeed(id, title string, list []book) *opds.Feed {
-	f := opds.NewFeed(id, title).Self(opdshttp.FeedPath(prefix, ""), opds.MediaTypeAcquisition)
+	// No self link: the handler injects one derived from the request URL.
+	f := opds.NewFeed(id, title)
 	for _, b := range list {
 		f.Add(toPublication(b))
 	}

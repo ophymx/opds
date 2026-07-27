@@ -345,6 +345,36 @@ func TestSelfLinkWithMatchingPageKept(t *testing.T) {
 	}
 }
 
+// cachedSource returns the same *opds.Feed value for every request, the way a
+// Source with a static catalog naturally would.
+type cachedSource struct {
+	memSource
+	feed *opds.Feed
+}
+
+func (s cachedSource) Root(_ context.Context, _ opds.FeedRequest) (*opds.Feed, error) {
+	return s.feed, nil
+}
+
+func TestHandlerDoesNotMutateSourceFeed(t *testing.T) {
+	src := cachedSource{memSource{prefix: "/opds"}, opds.NewFeed("urn:root", "Root")}
+	h := opdshttp.New(src, opdshttp.WithPrefix("/opds"))
+
+	// A 2.0 request injects self and templated-search links; they must land in
+	// a copy, not the shared feed.
+	get(t, h, "/opds/?version=2&page=2", "")
+	if len(src.feed.Links) != 0 {
+		t.Fatalf("handler mutated the Source's feed links: %+v", src.feed.Links)
+	}
+
+	// A subsequent 1.2 request must still get the OpenSearch link, not a stale
+	// 2.0 templated link left over from the previous request.
+	body := get(t, h, "/opds/", "").Body.String()
+	if !strings.Contains(body, `href="/opds/opensearch.xml"`) {
+		t.Errorf("1.2 feed missing OpenSearch link:\n%s", body)
+	}
+}
+
 func TestSearchDisabledWithoutSearcher(t *testing.T) {
 	// Wrapping in a struct that embeds only opds.Source hides the Searcher
 	// methods, so the handler must not enable search.
