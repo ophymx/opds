@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,31 +33,39 @@ type Authenticator interface {
 }
 
 // StaticUsers returns an Authenticator that checks credentials against a
-// fixed username → password map (which is copied, so later changes to the
-// caller's map have no effect). The authenticated identity is the username.
+// fixed username → password map. The authenticated identity is the username.
 //
-// Comparison is constant-time over password digests, so neither the password
-// length nor a username's existence leaks through timing. Passwords are held
-// in memory in plain text, which is a deliberate fit for small deployments
-// with a handful of users in a config file; for hashed-at-rest credentials,
-// implement Authenticator over your hash scheme (e.g. x/crypto/bcrypt,
-// returning ErrInvalidCredentials on mismatch) — the library keeps that
+// Passwords are digested at construction and only the SHA-256 digests are
+// retained, so the per-request work — hashing the presented password and a
+// constant-time compare of fixed-length digests — is independent of the
+// stored credentials: timing reveals neither stored-password lengths nor
+// whether a username exists. This is a deliberate fit for small deployments
+// with a handful of users in a config file; for hashed-at-rest credentials
+// (bcrypt, htpasswd), implement Authenticator over your hash scheme
+// (returning ErrInvalidCredentials on mismatch) — the library keeps that
 // dependency out of your build. Rate limiting and lockout, if needed, also
 // belong in a wrapping Authenticator.
 func StaticUsers(users map[string]string) Authenticator {
-	return staticUsers(maps.Clone(users))
+	m := make(staticUsers, len(users))
+	for name, pw := range users {
+		m[name] = sha256.Sum256([]byte(pw))
+	}
+	return m
 }
 
-type staticUsers map[string]string
+type staticUsers map[string][sha256.Size]byte
+
+// dummyDigest keeps the unknown-user path doing the same comparison work as
+// the known-user path.
+var dummyDigest = sha256.Sum256(nil)
 
 func (u staticUsers) Authenticate(username, password string) (string, error) {
 	want, ok := u[username]
-	// Compare fixed-length digests rather than the raw strings, and compare
-	// even for unknown users, so timing reveals neither password length nor
-	// whether the username exists.
-	wantSum := sha256.Sum256([]byte(want))
-	gotSum := sha256.Sum256([]byte(password))
-	if subtle.ConstantTimeCompare(wantSum[:], gotSum[:]) == 1 && ok {
+	if !ok {
+		want = dummyDigest
+	}
+	got := sha256.Sum256([]byte(password))
+	if subtle.ConstantTimeCompare(want[:], got[:]) == 1 && ok {
 		return username, nil
 	}
 	return "", ErrInvalidCredentials
