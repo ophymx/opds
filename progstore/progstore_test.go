@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -141,6 +142,12 @@ func TestHostileKeysAreConfined(t *testing.T) {
 		{"user", "urn:b1/../urn:b2"},
 		{".", ".."},
 		{"nul\x00byte", "co\nn"},
+		// Case-only distinct keys must stay distinct even where the
+		// filesystem is case-insensitive (single-case encoding).
+		{"User", "URN:B1"},
+		// Keys past the plain-encoding limit fall back to hashed names.
+		{strings.Repeat("u", 300), strings.Repeat("p", 5000)},
+		{strings.Repeat("u", 300), strings.Repeat("q", 5000)},
 	}
 	for i, k := range keys {
 		p := sample(ts)
@@ -156,18 +163,26 @@ func TestHostileKeysAreConfined(t *testing.T) {
 		}
 	}
 
-	// Nothing may exist outside the store directory, and everything inside it
-	// must be within depth 2 (user dir / record file).
+	// Nothing may exist outside the store directory; everything inside it
+	// must be within depth 2 (user dir / record file), single-case encoded,
+	// and short enough for common 255-byte filename limits.
+	nameOK := regexp.MustCompile(`^@?[A-Z2-7]+(\.json)?$`)
 	if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		rel, _ := filepath.Rel(dir, path)
-		if rel != "." && strings.Count(rel, string(filepath.Separator)) > 1 {
+		if rel == "." {
+			return nil
+		}
+		if strings.Count(rel, string(filepath.Separator)) > 1 {
 			t.Errorf("unexpected depth: %s", rel)
 		}
 		if strings.Contains(rel, "..") {
 			t.Errorf("path escaped encoding: %s", rel)
+		}
+		if name := d.Name(); !nameOK.MatchString(name) || len(name) > 140 {
+			t.Errorf("unsafe or overlong name (%d bytes): %q", len(name), name)
 		}
 		return nil
 	}); err != nil {
@@ -175,6 +190,61 @@ func TestHostileKeysAreConfined(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "..", "passwd.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("record escaped the store directory")
+	}
+}
+
+// A corrupt record file is visible on read but healed by the next write.
+func TestCorruptRecordHealsOnWrite(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := progstore.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	if err := s.SetProgression(ctx, "jane", "urn:b1", sample(ts)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrupt the record on disk.
+	var recPath string
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, _ error) error {
+		if !d.IsDir() && strings.HasSuffix(path, ".json") {
+			recPath = path
+		}
+		return nil
+	})
+	if err := os.WriteFile(recPath, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Progression(ctx, "jane", "urn:b1"); err == nil || errors.Is(err, opds.ErrNotFound) {
+		t.Errorf("corrupt read: err = %v, want a visible corruption error", err)
+	}
+	if err := s.SetProgression(ctx, "jane", "urn:b1", sample(ts.Add(time.Hour))); err != nil {
+		t.Fatalf("write did not heal the corrupt record: %v", err)
+	}
+	if got, err := s.Progression(ctx, "jane", "urn:b1"); err != nil || !got.Modified.Equal(ts.Add(time.Hour)) {
+		t.Errorf("after heal: %+v, %v", got, err)
+	}
+}
+
+// New sweeps temp files a crashed writer left behind.
+func TestNewSweepsOrphanedTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	userDir := filepath.Join(dir, "USERDIR")
+	if err := os.MkdirAll(userDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(userDir, ".tmp-123")
+	if err := os.WriteFile(orphan, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := progstore.New(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("orphaned temp file survived New: %v", err)
 	}
 }
 

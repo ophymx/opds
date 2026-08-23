@@ -8,21 +8,39 @@
 //
 //	<dir>/<user>/<publication>.json
 //
-// with both path segments base64url-encoded (RFC 4648 §5, unpadded), so keys
-// are treated as opaque bytes and can never traverse or collide with paths.
-// Records are written atomically (temp file + rename) with last-write-wins
-// semantics; staleness ordering is the caller's concern (the opdshttp handler
-// enforces the Progression draft's modified-based ordering before writing).
-// The record format is versioned only by field addition, so stores are
-// portable between servers sharing this package.
+// with both path segments encoded as unpadded base32 (RFC 4648 §6) — a
+// single-case alphabet, so distinct keys stay distinct even on
+// case-insensitive filesystems, and keys are treated as opaque bytes that can
+// never traverse or collide with paths. A key whose encoding would approach
+// filesystem name-length limits is stored under its SHA-256 digest instead,
+// marked with a "@" prefix (outside the base32 alphabet), so keys of any
+// length work. Records are written atomically: temp file, fsync, rename, and
+// a best-effort fsync of the containing directory. The record format is
+// versioned only by field addition, so stores are portable between servers
+// sharing this package.
+//
+// A Store is safe for concurrent use within one process. Run a single server
+// process per store directory: writes are last-write-wins at whole-record
+// granularity, so two processes updating the same record concurrently could
+// interleave progression and last-read updates (and the opdshttp handler's
+// staleness ordering is only serialized in-process).
+//
+// The last-read half is the persistence slot for OPDS-PSE server-side resume:
+// the application's page-serving path calls SetLastRead as page fetches
+// arrive, and its Source reads LastRead when populating
+// opds.PageStream.LastRead/LastReadDate for the authenticated user (see
+// opdshttp.User). The library itself never writes it — per-page tracking
+// policy belongs to the application.
 package progstore
 
 import (
 	"context"
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/base32"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -32,17 +50,26 @@ import (
 	"github.com/ophymx/opds"
 )
 
-// Store is a file-backed reading-state store. It is safe for concurrent use
-// within a process; across processes, writes are atomic and last-write-wins.
+// Store is a file-backed reading-state store. See the package documentation
+// for the on-disk layout and concurrency model.
 type Store struct {
 	dir string
-	mu  sync.Mutex
+	// mu stripes record-level read-modify-write by (user, publication).
+	mu [16]sync.Mutex
 }
 
-// New returns a Store rooted at dir, creating the directory if needed.
+// New returns a Store rooted at dir, creating the directory if needed and
+// sweeping temp files left behind by a crashed process.
 func New(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("progstore: %w", err)
+	}
+	// Orphaned temp files are only ever left by a write that died between
+	// create and rename; with a single writing process none are in flight now.
+	if orphans, err := filepath.Glob(filepath.Join(dir, "*", ".tmp-*")); err == nil {
+		for _, o := range orphans {
+			os.Remove(o)
+		}
 	}
 	return &Store{dir: dir}, nil
 }
@@ -63,11 +90,17 @@ type progressionRecord struct {
 	References  []string  `json:"references,omitempty"`
 }
 
+// errCorruptRecord tags a record that exists but does not parse. Reads
+// surface it so the damage is visible; writes treat the record as absent and
+// heal it with the next update.
+var errCorruptRecord = errors.New("progstore: corrupt record")
+
 // Progression implements opdshttp.ProgressionStore. It returns
 // opds.ErrNotFound when no progression has been stored.
 func (s *Store) Progression(_ context.Context, user, publicationID string) (*opds.Progression, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu := s.lock(user, publicationID)
+	mu.Lock()
+	defer mu.Unlock()
 	rec, err := s.load(user, publicationID)
 	if err != nil {
 		return nil, err
@@ -88,8 +121,9 @@ func (s *Store) Progression(_ context.Context, user, publicationID string) (*opd
 // SetProgression implements opdshttp.ProgressionStore, replacing any stored
 // progression and preserving the record's last-read page.
 func (s *Store) SetProgression(_ context.Context, user, publicationID string, p *opds.Progression) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu := s.lock(user, publicationID)
+	mu.Lock()
+	defer mu.Unlock()
 	return s.update(user, publicationID, func(rec *record) {
 		rec.Progression = &progressionRecord{
 			Progression: p.Progression,
@@ -106,8 +140,9 @@ func (s *Store) SetProgression(_ context.Context, user, publicationID string, p 
 // was recorded, for populating opds.PageStream.LastRead/LastReadDate. It
 // returns opds.ErrNotFound when none has been stored.
 func (s *Store) LastRead(_ context.Context, user, publicationID string) (page int, date time.Time, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu := s.lock(user, publicationID)
+	mu.Lock()
+	defer mu.Unlock()
 	rec, err := s.load(user, publicationID)
 	if err != nil {
 		return 0, time.Time{}, err
@@ -122,18 +157,28 @@ func (s *Store) LastRead(_ context.Context, user, publicationID string) (page in
 // preserving the record's progression. A zero date is allowed and stored
 // as-is.
 func (s *Store) SetLastRead(_ context.Context, user, publicationID string, page int, date time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu := s.lock(user, publicationID)
+	mu.Lock()
+	defer mu.Unlock()
 	return s.update(user, publicationID, func(rec *record) {
 		rec.LastRead, rec.LastReadDate = page, date
 	})
 }
 
+func (s *Store) lock(user, publicationID string) *sync.Mutex {
+	h := fnv.New32a()
+	h.Write([]byte(user))
+	h.Write([]byte{0})
+	h.Write([]byte(publicationID))
+	return &s.mu[h.Sum32()%uint32(len(s.mu))]
+}
+
 // load reads the record for (user, publication), mapping a missing file to
-// opds.ErrNotFound.
+// opds.ErrNotFound and an unparseable one to errCorruptRecord.
 func (s *Store) load(user, publicationID string) (record, error) {
 	var rec record
-	b, err := os.ReadFile(s.path(user, publicationID))
+	path := s.path(user, publicationID)
+	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return rec, opds.ErrNotFound
 	}
@@ -141,17 +186,18 @@ func (s *Store) load(user, publicationID string) (record, error) {
 		return rec, fmt.Errorf("progstore: %w", err)
 	}
 	if err := json.Unmarshal(b, &rec); err != nil {
-		return rec, fmt.Errorf("progstore: corrupt record %s: %w", s.path(user, publicationID), err)
+		return record{}, fmt.Errorf("%w: %s: %v", errCorruptRecord, path, err)
 	}
 	return rec, nil
 }
 
-// update applies fn to the existing record (or a fresh one) and writes it
-// back atomically: the record is marshaled to a temp file in the destination
-// directory, synced, and renamed into place.
+// update applies fn to the existing record (or a fresh one — a corrupt record
+// is discarded and healed by the write) and writes it back atomically: the
+// record is marshaled to a temp file in the destination directory, synced,
+// renamed into place, and the directory entry is synced best-effort.
 func (s *Store) update(user, publicationID string, fn func(*record)) error {
 	rec, err := s.load(user, publicationID)
-	if err != nil && !errors.Is(err, opds.ErrNotFound) {
+	if err != nil && !errors.Is(err, opds.ErrNotFound) && !errors.Is(err, errCorruptRecord) {
 		return err
 	}
 	fn(&rec)
@@ -161,6 +207,10 @@ func (s *Store) update(user, publicationID string, fn func(*record)) error {
 	}
 	path := s.path(user, publicationID)
 	dir := filepath.Dir(path)
+	newDir := false
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		newDir = true
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("progstore: %w", err)
 	}
@@ -181,10 +231,44 @@ func (s *Store) update(user, publicationID string, fn func(*record)) error {
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("progstore: %w", err)
 	}
+	// Sync the directory entries so the rename (and a first-time directory
+	// creation) survive power loss. Best-effort: not every platform supports
+	// syncing directories.
+	syncDir(dir)
+	if newDir {
+		syncDir(s.dir)
+	}
 	return nil
 }
 
+func syncDir(path string) {
+	if d, err := os.Open(path); err == nil {
+		d.Sync()
+		d.Close()
+	}
+}
+
+// base32enc is unpadded RFC 4648 base32: its single-case alphabet keeps
+// distinct keys distinct on case-insensitive filesystems.
+var base32enc = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+// maxEncodedName caps a plainly encoded path segment (well under common
+// 255-byte filename limits, with margin for the ".json" suffix and stricter
+// filesystems); longer keys are stored under their digest.
+const maxEncodedName = 128
+
+// encodeKey maps an opaque key to a filesystem-safe name: base32 of the key
+// itself, or "@" plus base32 of its SHA-256 digest when the plain encoding
+// would exceed maxEncodedName. The "@" is outside the base32 alphabet, so the
+// two forms cannot collide.
+func encodeKey(key string) string {
+	if enc := base32enc.EncodeToString([]byte(key)); len(enc) <= maxEncodedName {
+		return enc
+	}
+	sum := sha256.Sum256([]byte(key))
+	return "@" + base32enc.EncodeToString(sum[:])
+}
+
 func (s *Store) path(user, publicationID string) string {
-	enc := base64.RawURLEncoding.EncodeToString
-	return filepath.Join(s.dir, enc([]byte(user)), enc([]byte(publicationID))+".json")
+	return filepath.Join(s.dir, encodeKey(user), encodeKey(publicationID)+".json")
 }
