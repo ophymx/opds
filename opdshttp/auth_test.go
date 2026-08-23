@@ -231,6 +231,36 @@ func TestAnonymousModeUnchanged(t *testing.T) {
 	}
 }
 
+func TestStaticUsers(t *testing.T) {
+	users := map[string]string{"jane": "secret", "kim": ""}
+	a := opdshttp.StaticUsers(users)
+
+	if user, err := a.Authenticate("jane", "secret"); err != nil || user != "jane" {
+		t.Errorf("valid credentials: user = %q, err = %v", user, err)
+	}
+	for name, creds := range map[string][2]string{
+		"wrong password":            {"jane", "Secret"},
+		"unknown user":              {"nobody", "secret"},
+		"unknown user + empty pass": {"nobody", ""},
+		"empty username":            {"", ""},
+	} {
+		if _, err := a.Authenticate(creds[0], creds[1]); !errors.Is(err, opdshttp.ErrInvalidCredentials) {
+			t.Errorf("%s: err = %v, want ErrInvalidCredentials", name, err)
+		}
+	}
+	// A user with a (discouraged) empty password can still authenticate: the
+	// unknown-user rejection must come from the map, not the empty compare.
+	if user, err := a.Authenticate("kim", ""); err != nil || user != "kim" {
+		t.Errorf("empty-password user: user = %q, err = %v", user, err)
+	}
+
+	// The map is copied at construction.
+	users["jane"] = "changed"
+	if _, err := a.Authenticate("jane", "secret"); err != nil {
+		t.Errorf("mutating the caller's map changed the authenticator: %v", err)
+	}
+}
+
 // erringAuth fails with a non-credential error, as a broken backend would.
 type erringAuth struct{ err error }
 

@@ -2,8 +2,11 @@ package opdshttp
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +31,37 @@ type Authenticator interface {
 	// other error reports an internal failure and is not treated as a
 	// credential rejection.
 	Authenticate(username, password string) (user string, err error)
+}
+
+// StaticUsers returns an Authenticator that checks credentials against a
+// fixed username → password map (which is copied, so later changes to the
+// caller's map have no effect). The authenticated identity is the username.
+//
+// Comparison is constant-time over password digests, so neither the password
+// length nor a username's existence leaks through timing. Passwords are held
+// in memory in plain text, which is a deliberate fit for small deployments
+// with a handful of users in a config file; for hashed-at-rest credentials,
+// implement Authenticator over your hash scheme (e.g. x/crypto/bcrypt,
+// returning ErrInvalidCredentials on mismatch) — the library keeps that
+// dependency out of your build. Rate limiting and lockout, if needed, also
+// belong in a wrapping Authenticator.
+func StaticUsers(users map[string]string) Authenticator {
+	return staticUsers(maps.Clone(users))
+}
+
+type staticUsers map[string]string
+
+func (u staticUsers) Authenticate(username, password string) (string, error) {
+	want, ok := u[username]
+	// Compare fixed-length digests rather than the raw strings, and compare
+	// even for unknown users, so timing reveals neither password length nor
+	// whether the username exists.
+	wantSum := sha256.Sum256([]byte(want))
+	gotSum := sha256.Sum256([]byte(password))
+	if subtle.ConstantTimeCompare(wantSum[:], gotSum[:]) == 1 && ok {
+		return username, nil
+	}
+	return "", ErrInvalidCredentials
 }
 
 // AuthDocument configures the OPDS Authentication Document the handler serves:

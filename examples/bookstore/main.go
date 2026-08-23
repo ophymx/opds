@@ -139,16 +139,6 @@ func toPublication(b book) opds.Publication {
 	return *p
 }
 
-// demoAuth authenticates the fixed demo user.
-type demoAuth struct{}
-
-func (demoAuth) Authenticate(username, password string) (string, error) {
-	if username == "demo" && password == "demo" {
-		return "demo", nil
-	}
-	return "", opdshttp.ErrInvalidCredentials
-}
-
 func main() {
 	auth := flag.Bool("auth", false, "require Basic authentication (demo/demo) and enable progression sync")
 	addr := flag.String("addr", ":8080", "listen address")
@@ -160,7 +150,7 @@ func main() {
 	}
 	if *auth {
 		opts = append(opts,
-			opdshttp.WithAuth(demoAuth{}, opdshttp.AuthDocument{
+			opdshttp.WithAuth(opdshttp.StaticUsers(map[string]string{"demo": "demo"}), opdshttp.AuthDocument{
 				Title:       "Example Bookstore",
 				Description: `Sign in with the demo account: user "demo", password "demo".`,
 				Links: []opds.Link{
