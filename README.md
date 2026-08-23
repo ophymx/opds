@@ -32,6 +32,7 @@ go get github.com/ophymx/opds
 | `opds/opds2` | Encodes the model to OPDS 2.0 (JSON). |
 | `opds/opensearch` | Generates OpenSearch description documents (1.x search). |
 | `opds/opdshttp` | Embeddable `http.Handler`: routing, content negotiation, pagination, search, Basic authentication, progression sync. |
+| `opds/progstore` | Durable file-backed `ProgressionStore` (plus OPDS-PSE last-read storage). |
 
 ## Quick start
 
@@ -208,14 +209,20 @@ h := opdshttp.New(catalog{},
 ```
 
 The authenticated identity reaches your `Source` through the request context:
-`user, ok := opdshttp.User(ctx)`.
+`user, ok := opdshttp.User(ctx)`. For small deployments,
+`opdshttp.StaticUsers(map[string]string{...})` is a ready-made `Authenticator`
+with constant-time comparison; anything hashed-at-rest (bcrypt, htpasswd) or
+rate-limited is a small wrapper you write, keeping those dependencies out of
+the library.
 
 `WithProgression` adds per-user reading-position sync per the
 [OPDS Progression 1.0 draft](https://drafts.opds.io/opds-progression-1.0.html):
 every publication is advertised with a progression link, and the handler
 serves GET/PUT at `{prefix}/progression/{id}` through the `ProgressionStore`
 interface you supply, keyed by user and `Publication.ID`
-(`NewMemProgressionStore` covers tests and examples). The same endpoint and
+(`NewMemProgressionStore` covers tests and examples; `progstore.New(dir)` is
+a durable file-backed store that also persists OPDS-PSE last-read pages, so
+one store carries all per-user reading state). The same endpoint and
 store also answer the pre-spec Cantook rel
 (`http://www.cantook.com/api/progression`, the Readium-locator shape) that
 Komga and Stump serve and the Cantook/Aldiko client family consumes.

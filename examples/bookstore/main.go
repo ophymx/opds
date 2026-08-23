@@ -36,6 +36,7 @@ import (
 
 	"github.com/ophymx/opds"
 	"github.com/ophymx/opds/opdshttp"
+	"github.com/ophymx/opds/progstore"
 )
 
 const prefix = "/opds"
@@ -141,6 +142,7 @@ func toPublication(b book) opds.Publication {
 
 func main() {
 	auth := flag.Bool("auth", false, "require Basic authentication (demo/demo) and enable progression sync")
+	data := flag.String("data", "", "with --auth: directory for persistent reading state (default in-memory)")
 	addr := flag.String("addr", ":8080", "listen address")
 	flag.Parse()
 
@@ -149,6 +151,14 @@ func main() {
 		opdshttp.WithDefaultVersion(opds.Version1),
 	}
 	if *auth {
+		var store opdshttp.ProgressionStore = opdshttp.NewMemProgressionStore()
+		if *data != "" {
+			var err error
+			if store, err = progstore.New(*data); err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("persisting reading state under %s", *data)
+		}
 		opts = append(opts,
 			opdshttp.WithAuth(opdshttp.StaticUsers(map[string]string{"demo": "demo"}), opdshttp.AuthDocument{
 				Title:       "Example Bookstore",
@@ -157,7 +167,7 @@ func main() {
 					{Rel: "help", Href: "https://github.com/ophymx/opds"},
 				},
 			}),
-			opdshttp.WithProgression(opdshttp.NewMemProgressionStore()),
+			opdshttp.WithProgression(store),
 		)
 		log.Printf(`authentication enabled: user "demo", password "demo"`)
 	}
