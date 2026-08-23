@@ -487,18 +487,35 @@ func (h *Handler) progressionLinked(pubs []opds.Publication) []opds.Publication 
 	return out
 }
 
-// progressionLink appends the progression endpoint link for the publication
+// progressionLink appends the progression endpoint links for the publication
 // with the given id — the id the endpoint hands to the ProgressionStore — to a
-// clone of links, unless one is already present or the publication has no ID.
+// clone of links: the draft relation, and the Cantook alias for the deployed
+// Komga/Stump client family. Links already present (or an empty id) are left
+// alone.
 func (h *Handler) progressionLink(links []opds.Link, id string) []opds.Link {
-	if id == "" || hasRel(links, opds.RelProgression) {
+	if id == "" {
 		return links
 	}
-	return append(slices.Clone(links), opds.Link{
-		Rel:  opds.RelProgression,
-		Href: ProgressionPath(h.prefix, url.PathEscape(id)),
-		Type: opds.MediaTypeProgression,
-	})
+	path := ProgressionPath(h.prefix, url.PathEscape(id))
+	var add []opds.Link
+	if !hasRel(links, opds.RelProgression) {
+		add = append(add, opds.Link{
+			Rel:  opds.RelProgression,
+			Href: path,
+			Type: opds.MediaTypeProgression,
+		})
+	}
+	if !hasRel(links, opds.RelProgressionCantook) {
+		add = append(add, opds.Link{
+			Rel:  opds.RelProgressionCantook,
+			Href: path + "?format=readium",
+			Type: opds.MediaTypeProgressionReadium,
+		})
+	}
+	if len(add) == 0 {
+		return links
+	}
+	return append(slices.Clone(links), add...)
 }
 
 // searchTemplateV2 derives the OPDS 2.0 templated search href from the Source's

@@ -24,6 +24,11 @@ const (
 	// MediaTypeProgression is the media type of an OPDS Progression Document
 	// (see Progression).
 	MediaTypeProgression = "application/opds-progression+json"
+
+	// MediaTypeProgressionReadium is the media type of the pre-spec,
+	// Readium-locator-shaped progression document served under
+	// RelProgressionCantook.
+	MediaTypeProgressionReadium = "application/vnd.readium.progression+json"
 )
 
 // XML namespace URIs used by OPDS 1.x (Atom) feeds.
@@ -69,6 +74,13 @@ const (
 	// RelProgression advertises a publication's progression endpoint
 	// (see Progression).
 	RelProgression = "http://opds-spec.org/progression"
+
+	// RelProgressionCantook is the pre-spec progression relation that predates
+	// the OPDS Progression draft: Komga and Stump serve it and the
+	// Cantook/Aldiko client family consumes it. The document shape is a
+	// Readium Locator (MediaTypeProgressionReadium), not a Progression
+	// Document; opdshttp aliases it onto the same store.
+	RelProgressionCantook = "http://www.cantook.com/api/progression"
 
 	RelFacet         = "http://opds-spec.org/facet"
 	RelGroup         = "http://opds-spec.org/group"

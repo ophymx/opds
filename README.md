@@ -260,7 +260,11 @@ Vendored schema provenance (and the one documented upstream-typo fix in
   (`opdshttp.WithProgression`, backed by a caller-supplied `ProgressionStore`):
   publications are advertised with a progression link, and the handler serves
   GET/PUT with the draft's validation, staleness (409), and problem-details
-  semantics. Requires `WithAuth` — progression is per-user by definition.
+  semantics. Requires `WithAuth` — progression is per-user by definition. The
+  same endpoint and store also serve the pre-spec Cantook alias
+  (`http://www.cantook.com/api/progression`, the Readium-locator shape that
+  Komga and Stump serve and Cantook/Aldiko consume), translated with the
+  deployed servers' status semantics.
 - Page streaming for comics/manga via
   [OPDS-PSE](https://anansi-project.github.io/docs/opds-pse/intro) 1.2
   (`pse:count`, `pse:lastRead`, `pse:lastReadDate`) — 1.x feeds only, like the
@@ -274,9 +278,9 @@ standard in OPDS 2.0 but are *not* part of the official OPDS 1.2 RELAX NG schema
 emits them in both versions because real library clients rely on them; just be
 aware that a 1.2 feed using them intentionally goes beyond the core 1.2 schema.
 
-Not yet included: the pre-spec Cantook progression rel
-(`http://www.cantook.com/api/progression`) that Komga and Stump serve — planned
-as a compatibility alias. Contributions welcome.
+Deliberately out of scope: user management (the `Authenticator` interface is
+the boundary), auth flows beyond Basic, KOReader kosync, and annotation sync.
+Contributions welcome.
 
 ## References
 

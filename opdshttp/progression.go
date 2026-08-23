@@ -39,6 +39,15 @@ type ProgressionStore interface {
 // invalid document, 409 when the stored progression is more recent — errors
 // carry an RFC 7807 problem body).
 //
+// The same endpoint also serves the pre-spec Cantook alias
+// (opds.RelProgressionCantook, advertised as a second injected link): the
+// Readium-locator-shaped document that Komga and Stump serve and the
+// Cantook/Aldiko client family consumes, translated onto the same store with
+// the deployed servers' status semantics (GET 204 when nothing is stored,
+// PUT 204 on success). Publication-level progression, title, device, modified
+// and the locator href/fragments translate both ways; resource-level
+// progression and position have no draft equivalent and are dropped.
+//
 // Progression is per-user by definition, so WithProgression requires WithAuth:
 // New panics when the store is configured without an Authenticator.
 func WithProgression(store ProgressionStore) Option {
@@ -73,8 +82,9 @@ func (h *Handler) serveProgression(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	user, _ := User(r.Context()) // authenticated: New requires WithAuth
+	readium := readiumRequest(r)
 	if r.Method == http.MethodPut {
-		h.putProgression(w, r, user, id)
+		h.putProgression(w, r, user, id, readium)
 		return
 	}
 	p, err := h.progression.Progression(r.Context(), user, id)
@@ -84,25 +94,59 @@ func (h *Handler) serveProgression(w http.ResponseWriter, r *http.Request, id st
 	}
 	if p == nil {
 		// The draft prescribes 200 with an empty payload over 404 when no
-		// progression has been communicated yet.
-		w.WriteHeader(http.StatusOK)
+		// progression has been communicated yet; the Readium alias mirrors
+		// Komga's 204.
+		if readium {
+			w.WriteHeader(http.StatusNoContent)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
 		return
 	}
-	body, err := marshalProgression(p)
+	var (
+		body []byte
+		ct   = opds.MediaTypeProgression
+	)
+	if readium {
+		body, err = marshalReadiumProgression(p)
+		ct = opds.MediaTypeProgressionReadium
+	} else {
+		body, err = marshalProgression(p)
+	}
 	if err != nil {
 		h.handleError(w, r, err)
 		return
 	}
-	write(w, r, opds.MediaTypeProgression, body)
+	write(w, r, ct, body)
 }
 
-func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, id string) {
+// readiumRequest reports whether the request addresses the Cantook/Readium
+// alias rather than the draft document: the injected RelProgressionCantook
+// link carries ?format=readium, and the media type in Content-Type (PUT) or
+// Accept (GET) is honored for clients that construct their own requests.
+func readiumRequest(r *http.Request) bool {
+	if r.URL.Query().Get("format") == "readium" {
+		return true
+	}
+	hdr := r.Header.Get("Accept")
+	if r.Method == http.MethodPut {
+		hdr = r.Header.Get("Content-Type")
+	}
+	return strings.Contains(hdr, "vnd.readium.progression")
+}
+
+func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, id string, readium bool) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxProgressionBody))
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, problemProgressionInvalid)
 		return
 	}
-	p, err := unmarshalProgression(body)
+	var p *opds.Progression
+	if readium {
+		p, err = unmarshalReadiumProgression(body)
+	} else {
+		p, err = unmarshalProgression(body)
+	}
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, problemProgressionInvalid)
 		return
@@ -118,6 +162,11 @@ func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, i
 	}
 	if err := h.progression.SetProgression(r.Context(), user, id, p); err != nil {
 		h.handleError(w, r, err)
+		return
+	}
+	if readium {
+		// Komga parity: the deployed endpoint answers 204 with no body.
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	out, err := marshalProgression(p)
@@ -200,6 +249,109 @@ func unmarshalProgression(body []byte) (*opds.Progression, error) {
 		Title:       doc.Title,
 		References:  doc.References,
 	}, nil
+}
+
+// Wire shape of the pre-spec Cantook/Readium progression document, as served
+// by Komga (R2Progression) and Stump and consumed by Cantook/Aldiko: a Readium
+// Locator (https://readium.org/architecture/schema/locator.schema.json) under
+// "locator" instead of the draft's flat fields.
+type (
+	readiumProgressionJSON struct {
+		Modified string             `json:"modified"`
+		Device   deviceJSON         `json:"device"`
+		Locator  readiumLocatorJSON `json:"locator"`
+	}
+	readiumLocatorJSON struct {
+		Href      string                `json:"href,omitempty"`
+		Type      string                `json:"type,omitempty"`
+		Title     string                `json:"title,omitempty"`
+		Locations *readiumLocationsJSON `json:"locations,omitempty"`
+	}
+	readiumLocationsJSON struct {
+		Fragments        []string `json:"fragments,omitempty"`
+		Position         *int     `json:"position,omitempty"`
+		Progression      *float64 `json:"progression,omitempty"`
+		TotalProgression *float64 `json:"totalProgression,omitempty"`
+	}
+)
+
+// marshalReadiumProgression translates a stored Progression into the Cantook
+// document. Modified, device, title and the publication-level progression
+// (locations.totalProgression) map directly; the locator href and fragments
+// are reconstructed from References when they share a single resource (the
+// inverse of the mapping unmarshalReadiumProgression applies).
+func marshalReadiumProgression(p *opds.Progression) ([]byte, error) {
+	tp := p.Progression
+	loc := readiumLocatorJSON{
+		Title:     p.Title,
+		Locations: &readiumLocationsJSON{TotalProgression: &tp},
+	}
+	if href, fragments, ok := splitReferences(p.References); ok {
+		loc.Href = href
+		loc.Locations.Fragments = fragments
+	}
+	return json.Marshal(readiumProgressionJSON{
+		Modified: p.Modified.UTC().Format(time.RFC3339),
+		Device:   deviceJSON{ID: p.Device.ID, Name: p.Device.Name},
+		Locator:  loc,
+	})
+}
+
+// unmarshalReadiumProgression parses and validates a Cantook document,
+// translating it to the draft model: locations.totalProgression (required)
+// becomes Progression, and the locator href/fragments become References as
+// media-fragment URIs ("href#fragment"). Resource-level progression and
+// position have no draft equivalent and are dropped. Device is not validated,
+// matching the deployed servers this alias exists to be compatible with.
+func unmarshalReadiumProgression(body []byte) (*opds.Progression, error) {
+	var doc readiumProgressionJSON
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil, err
+	}
+	modified, err := time.Parse(time.RFC3339, doc.Modified)
+	if err != nil {
+		return nil, errors.New("opdshttp: progression modified missing or not RFC 3339")
+	}
+	if doc.Locator.Locations == nil || doc.Locator.Locations.TotalProgression == nil {
+		return nil, errors.New("opdshttp: locator.locations.totalProgression is required")
+	}
+	tp := *doc.Locator.Locations.TotalProgression
+	if tp < 0 || tp > 1 {
+		return nil, errors.New("opdshttp: totalProgression outside [0, 1]")
+	}
+	var refs []string
+	if fragments := doc.Locator.Locations.Fragments; len(fragments) > 0 {
+		for _, f := range fragments {
+			refs = append(refs, doc.Locator.Href+"#"+f)
+		}
+	} else if doc.Locator.Href != "" {
+		refs = []string{doc.Locator.Href}
+	}
+	return &opds.Progression{
+		Progression: tp,
+		Modified:    modified,
+		Device:      opds.Device{ID: doc.Device.ID, Name: doc.Device.Name},
+		Title:       doc.Locator.Title,
+		References:  refs,
+	}, nil
+}
+
+// splitReferences factors media-fragment URI references into a common resource
+// href and its fragments. It reports false when the references do not share a
+// single resource, in which case they cannot be represented as one locator.
+func splitReferences(refs []string) (href string, fragments []string, ok bool) {
+	for i, ref := range refs {
+		h, frag, _ := strings.Cut(ref, "#")
+		if i == 0 {
+			href = h
+		} else if h != href {
+			return "", nil, false
+		}
+		if frag != "" {
+			fragments = append(fragments, frag)
+		}
+	}
+	return href, fragments, len(refs) > 0
 }
 
 // MemProgressionStore is an in-memory ProgressionStore for tests and examples.
