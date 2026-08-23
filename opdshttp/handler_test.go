@@ -451,6 +451,24 @@ func TestPageStreamPathTemplate(t *testing.T) {
 	}
 }
 
+// Behind a reverse proxy the advertised absolute URLs must use the forwarded
+// host, not the internal one the proxy dialed.
+func TestBaseURLHonorsForwardedHost(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/opds/opensearch.xml", nil)
+	r.Host = "10.0.0.5:8080"
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("X-Forwarded-Host", "books.example.com, 10.0.0.5:8080")
+	w := httptest.NewRecorder()
+	newServer().ServeHTTP(w, r)
+	body := w.Body.String()
+	if !strings.Contains(body, "https://books.example.com/opds/search") {
+		t.Errorf("template does not use forwarded host:\n%s", body)
+	}
+	if strings.Contains(body, "10.0.0.5") {
+		t.Errorf("internal host leaked:\n%s", body)
+	}
+}
+
 func TestSearchDisabledWithoutSearcher(t *testing.T) {
 	// Wrapping in a struct that embeds only opds.Source hides the Searcher
 	// methods, so the handler must not enable search.

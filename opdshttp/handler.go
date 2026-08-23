@@ -544,10 +544,22 @@ func baseURL(r *http.Request) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+	if proto := forwardedValue(r.Header.Get("X-Forwarded-Proto")); proto != "" {
 		scheme = proto
 	}
-	return scheme + "://" + r.Host
+	host := r.Host
+	if fwd := forwardedValue(r.Header.Get("X-Forwarded-Host")); fwd != "" {
+		host = fwd
+	}
+	return scheme + "://" + host
+}
+
+// forwardedValue returns the first element of an X-Forwarded-* header, which
+// proxies append to as a comma-separated list; the first element is the value
+// the client-facing proxy saw.
+func forwardedValue(v string) string {
+	v, _, _ = strings.Cut(v, ",")
+	return strings.TrimSpace(v)
 }
 
 func firstNonEmpty(vals ...string) string {
