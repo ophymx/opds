@@ -255,6 +255,12 @@ Vendored schema provenance (and the one documented upstream-typo fix in
   Document body (for clients like Thorium and Cantook), feeds advertise the
   document link, and the authenticated identity reaches your `Source` via
   `opdshttp.User`.
+- Per-user reading-progression sync via the
+  [OPDS Progression 1.0 draft](https://drafts.opds.io/opds-progression-1.0.html)
+  (`opdshttp.WithProgression`, backed by a caller-supplied `ProgressionStore`):
+  publications are advertised with a progression link, and the handler serves
+  GET/PUT with the draft's validation, staleness (409), and problem-details
+  semantics. Requires `WithAuth` — progression is per-user by definition.
 - Page streaming for comics/manga via
   [OPDS-PSE](https://anansi-project.github.io/docs/opds-pse/intro) 1.2
   (`pse:count`, `pse:lastRead`, `pse:lastReadDate`) — 1.x feeds only, like the
@@ -268,8 +274,9 @@ standard in OPDS 2.0 but are *not* part of the official OPDS 1.2 RELAX NG schema
 emits them in both versions because real library clients rely on them; just be
 aware that a 1.2 feed using them intentionally goes beyond the core 1.2 schema.
 
-Not yet included: reading-progression sync (the OPDS Progression draft).
-Contributions welcome.
+Not yet included: the pre-spec Cantook progression rel
+(`http://www.cantook.com/api/progression`) that Komga and Stump serve — planned
+as a compatibility alias. Contributions welcome.
 
 ## References
 
@@ -277,6 +284,7 @@ Contributions welcome.
 - [OPDS 2.0 specification](https://drafts.opds.io/opds-2.0)
 - [OPDS-PSE specification](https://anansi-project.github.io/docs/opds-pse/specs/v1.2)
 - [Authentication for OPDS 1.0](https://drafts.opds.io/authentication-for-opds-1.0.html)
+- [OPDS Progression 1.0 draft](https://drafts.opds.io/opds-progression-1.0.html)
 - [Readium Web Publication Manifest](https://readium.org/webpub-manifest/)
 - [OpenSearch 1.1](https://github.com/dewitt/opensearch)
 

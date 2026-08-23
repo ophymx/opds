@@ -12,6 +12,7 @@
 //	{prefix}/opensearch.xml   the OpenSearch description document
 //	{prefix}/page/{id}        a single page image (if the Source is an opds.PageSource)
 //	{prefix}/auth             the OPDS Authentication Document (if WithAuth is configured)
+//	{prefix}/progression/{id} per-user reading progression, GET and PUT (if WithProgression is configured)
 //
 // Use FeedPath, PublicationPath, SearchPath and PageStreamPath (or the
 // Handler's URL methods) to build hrefs in your Source that match this layout.
@@ -50,6 +51,7 @@ type Handler struct {
 	pages          opds.PageSource
 	auth           Authenticator
 	authDoc        AuthDocument
+	progression    ProgressionStore
 	prefix         string
 	defaultVersion opds.Version
 	errorHandler   func(http.ResponseWriter, *http.Request, error)
@@ -91,6 +93,9 @@ func New(src opds.Source, opts ...Option) *Handler {
 	}
 	for _, o := range opts {
 		o(h)
+	}
+	if h.progression != nil && h.auth == nil {
+		panic("opdshttp: WithProgression requires WithAuth (progression is per-user)")
 	}
 	return h
 }
@@ -161,14 +166,24 @@ func (h *Handler) SearchPageURL(query url.Values, page int) string {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
+	rest := strings.TrimPrefix(r.URL.Path, h.prefix)
+	rest = strings.TrimPrefix(rest, "/")
+
+	// Every route is read-only except the progression endpoint, which also
+	// accepts PUT (when a store is configured).
+	allowPut := h.progression != nil && strings.HasPrefix(rest, "progression/")
+	switch {
+	case r.Method == http.MethodGet, r.Method == http.MethodHead:
+	case r.Method == http.MethodPut && allowPut:
+	default:
+		allow := "GET, HEAD"
+		if allowPut {
+			allow = "GET, HEAD, PUT"
+		}
+		w.Header().Set("Allow", allow)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	rest := strings.TrimPrefix(r.URL.Path, h.prefix)
-	rest = strings.TrimPrefix(rest, "/")
 
 	// The Authentication Document is how a client learns to authenticate, so
 	// it is the one route served without credentials.
@@ -201,6 +216,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveFeed(w, r, strings.TrimPrefix(rest, "feed/"))
 	case strings.HasPrefix(rest, "page/"):
 		h.servePage(w, r, strings.TrimPrefix(rest, "page/"))
+	case strings.HasPrefix(rest, "progression/"):
+		h.serveProgression(w, r, strings.TrimPrefix(rest, "progression/"))
 	default:
 		http.NotFound(w, r)
 	}
@@ -232,6 +249,11 @@ func (h *Handler) servePublication(w http.ResponseWriter, r *http.Request, id st
 	if err != nil {
 		h.handleError(w, r, err)
 		return
+	}
+	if h.progression != nil {
+		p := *pub
+		p.Links = h.progressionLink(p.Links, p.ID)
+		pub = &p
 	}
 	var (
 		body []byte
@@ -369,6 +391,15 @@ func (h *Handler) writeFeed(w http.ResponseWriter, r *http.Request, f *opds.Feed
 	feed.Links = slices.Clone(f.Links)
 	f = &feed
 	h.ensureLinks(r, f, v)
+	if h.progression != nil {
+		f.Publications = h.progressionLinked(f.Publications)
+		if slices.ContainsFunc(f.Groups, func(g opds.Group) bool { return len(g.Publications) > 0 }) {
+			f.Groups = slices.Clone(f.Groups)
+			for i := range f.Groups {
+				f.Groups[i].Publications = h.progressionLinked(f.Groups[i].Publications)
+			}
+		}
+	}
 	var (
 		body []byte
 		ct   string
@@ -440,6 +471,34 @@ func (h *Handler) ensureLinks(r *http.Request, f *opds.Feed, v opds.Version) {
 			Type: opds.MediaTypeAuthDocument,
 		})
 	}
+}
+
+// progressionLinked returns a copy of pubs with a progression link added to
+// each publication that lacks one (the per-publication analogue of
+// ensureLinks; the copy keeps the Source's shared feed unmutated).
+func (h *Handler) progressionLinked(pubs []opds.Publication) []opds.Publication {
+	if len(pubs) == 0 {
+		return pubs
+	}
+	out := slices.Clone(pubs)
+	for i := range out {
+		out[i].Links = h.progressionLink(out[i].Links, out[i].ID)
+	}
+	return out
+}
+
+// progressionLink appends the progression endpoint link for the publication
+// with the given id — the id the endpoint hands to the ProgressionStore — to a
+// clone of links, unless one is already present or the publication has no ID.
+func (h *Handler) progressionLink(links []opds.Link, id string) []opds.Link {
+	if id == "" || hasRel(links, opds.RelProgression) {
+		return links
+	}
+	return append(slices.Clone(links), opds.Link{
+		Rel:  opds.RelProgression,
+		Href: ProgressionPath(h.prefix, url.PathEscape(id)),
+		Type: opds.MediaTypeProgression,
+	})
 }
 
 // searchTemplateV2 derives the OPDS 2.0 templated search href from the Source's

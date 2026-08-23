@@ -20,6 +20,10 @@ const (
 	// MediaTypeAuthDocument is the media type of an OPDS Authentication Document
 	// (see https://drafts.opds.io/authentication-for-opds-1.0.html).
 	MediaTypeAuthDocument = "application/opds-authentication+json"
+
+	// MediaTypeProgression is the media type of an OPDS Progression Document
+	// (see Progression).
+	MediaTypeProgression = "application/opds-progression+json"
 )
 
 // XML namespace URIs used by OPDS 1.x (Atom) feeds.
@@ -61,6 +65,10 @@ const (
 	// RelAuthDocument advertises the catalog's OPDS Authentication Document
 	// (see opdshttp.WithAuth).
 	RelAuthDocument = "http://opds-spec.org/auth/document"
+
+	// RelProgression advertises a publication's progression endpoint
+	// (see Progression).
+	RelProgression = "http://opds-spec.org/progression"
 
 	RelFacet         = "http://opds-spec.org/facet"
 	RelGroup         = "http://opds-spec.org/group"

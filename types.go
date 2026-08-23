@@ -127,7 +127,11 @@ type PageStream struct {
 	// KOReader render only the first page when the count is missing.
 	PageCount int
 	// LastRead is the 1-based number of the last page read, for server-side
-	// resume (PSE 1.2). Zero means unknown and is omitted.
+	// resume (PSE 1.2). Zero means unknown and is omitted. A server tracking
+	// per-user positions can populate LastRead/LastReadDate from the same
+	// store that backs OPDS Progression (see Progression and
+	// opdshttp.ProgressionStore) — both key on (user, Publication.ID), with
+	// the user available via opdshttp.User.
 	LastRead int
 	// LastReadDate is when LastRead was recorded (PSE 1.2). Optional.
 	LastReadDate time.Time
