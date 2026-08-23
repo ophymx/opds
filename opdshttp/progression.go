@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"strings"
@@ -75,6 +76,15 @@ const (
 
 // maxProgressionBody bounds a PUT body; real Progression Documents are tiny.
 const maxProgressionBody = 64 << 10
+
+// fnv32 hashes a (user, publication) pair for lock striping.
+func fnv32(user, id string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(user))
+	h.Write([]byte{0})
+	h.Write([]byte(id))
+	return h.Sum32()
+}
 
 func (h *Handler) serveProgression(w http.ResponseWriter, r *http.Request, id string) {
 	if h.progression == nil {
@@ -151,6 +161,15 @@ func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, i
 		writeProblem(w, http.StatusBadRequest, problemProgressionInvalid)
 		return
 	}
+	// The staleness check and the store write must be atomic per (user,
+	// publication), or a concurrent older PUT could land after a newer one —
+	// the regression the 409 exists to prevent. This serializes them within
+	// this process; a store shared by several processes needs its own
+	// cross-process story (progstore, for one, documents a single writing
+	// process).
+	mu := &h.progLocks[fnv32(user, id)%uint32(len(h.progLocks))]
+	mu.Lock()
+	defer mu.Unlock()
 	existing, err := h.progression.Progression(r.Context(), user, id)
 	if err != nil && !errors.Is(err, opds.ErrNotFound) {
 		h.handleError(w, r, err)

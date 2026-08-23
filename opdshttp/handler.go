@@ -37,6 +37,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ophymx/opds"
 	"github.com/ophymx/opds/opds1"
@@ -56,6 +57,10 @@ type Handler struct {
 	base           string
 	defaultVersion opds.Version
 	errorHandler   func(http.ResponseWriter, *http.Request, error)
+
+	// progLocks stripes the progression PUT check-then-set by (user,
+	// publication) so a stale update cannot race past the 409 check.
+	progLocks [64]sync.Mutex
 }
 
 // Option configures a Handler.

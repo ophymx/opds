@@ -2,9 +2,11 @@ package opdshttp_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ophymx/opds"
@@ -211,6 +213,29 @@ func TestProgressionIsolatedPerUser(t *testing.T) {
 	}
 	if w := doAs("alice", http.MethodGet, ""); w.Body.Len() == 0 {
 		t.Errorf("alice's progression lost")
+	}
+}
+
+// Concurrent PUTs must serialize through the staleness check: once the newest
+// document lands, no older one may overwrite it, in any interleaving.
+func TestProgressionConcurrentPutsKeepNewest(t *testing.T) {
+	h := newProgressionServer()
+	base := `{"modified":"2026-08-%02dT10:00:00Z","device":{"id":"urn:d","name":"D"},"progression":0.5}`
+	var wg sync.WaitGroup
+	for day := 1; day <= 20; day++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w := do(t, h, http.MethodPut, "/opds/progression/urn:b1", fmt.Sprintf(base, day))
+			if w.Code != 200 && w.Code != 201 && w.Code != http.StatusConflict {
+				t.Errorf("day %d: code = %d", day, w.Code)
+			}
+		}()
+	}
+	wg.Wait()
+	w := do(t, h, http.MethodGet, "/opds/progression/urn:b1", "")
+	if !strings.Contains(w.Body.String(), "2026-08-20T10:00:00Z") {
+		t.Errorf("an older concurrent PUT won:\n%s", w.Body.String())
 	}
 }
 
