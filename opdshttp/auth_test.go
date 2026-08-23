@@ -159,6 +159,21 @@ func TestAuthDocumentServedWithoutCredentials(t *testing.T) {
 	}
 }
 
+func TestAuthDocumentUsesConfiguredBaseURL(t *testing.T) {
+	h := opdshttp.New(memSource{prefix: "/opds"},
+		opdshttp.WithPrefix("/opds"),
+		opdshttp.WithBaseURL("https://books.example.com"),
+		opdshttp.WithAuth(staticAuth{"jane", "secret", "user-1"}, testAuthDoc()),
+	)
+	r := httptest.NewRequest(http.MethodGet, "/opds/auth", nil)
+	r.Header.Set("X-Forwarded-Host", "evil.example")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if doc := decodeAuthDoc(t, w.Body.Bytes()); doc.ID != "https://books.example.com/opds/auth" {
+		t.Errorf("id = %q, want the configured base, not the forwarded host", doc.ID)
+	}
+}
+
 func TestAuthDocumentConfiguredIDKept(t *testing.T) {
 	doc := testAuthDoc()
 	doc.ID = "https://example.com/canonical/auth.json"

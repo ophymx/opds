@@ -173,7 +173,7 @@ func (h *Handler) writeUnauthorized(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) writeAuthDocument(w http.ResponseWriter, r *http.Request, code int) {
-	docURL := baseURL(r) + h.AuthURL()
+	docURL := h.baseURL(r) + h.AuthURL()
 	body, err := h.authDoc.marshal(docURL)
 	if err != nil {
 		h.handleError(w, r, err)

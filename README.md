@@ -223,6 +223,21 @@ Komga and Stump serve and the Cantook/Aldiko client family consumes.
 Try it live: `go run ./examples/bookstore --auth` (user `demo`, password
 `demo`).
 
+## Deployment notes
+
+- **Serve authenticated catalogs over HTTPS.** Basic authentication sends
+  credentials in cleartext, and reader clients will happily do so over plain
+  HTTP.
+- **Set `WithBaseURL` unless a trusted proxy fronts the handler.** Absolute
+  URLs (the OpenSearch template, the Authentication Document `id`) are
+  otherwise derived from the request's `Host`, `X-Forwarded-Proto`, and
+  `X-Forwarded-Host` headers, which are client-controlled: fine behind a
+  reverse proxy that overwrites them (the usual multi-user deployment), but a
+  directly exposed handler should pin its canonical base with
+  `opdshttp.WithBaseURL("https://books.example.com")`.
+- Rate limiting and brute-force lockout are the `Authenticator`
+  implementation's responsibility; the library only defines the boundary.
+
 ## Content negotiation
 
 The handler picks the version per request, in priority order:

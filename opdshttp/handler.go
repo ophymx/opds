@@ -53,6 +53,7 @@ type Handler struct {
 	authDoc        AuthDocument
 	progression    ProgressionStore
 	prefix         string
+	base           string
 	defaultVersion opds.Version
 	errorHandler   func(http.ResponseWriter, *http.Request, error)
 }
@@ -64,6 +65,23 @@ type Option func(*Handler)
 // trimmed of a trailing slash. The default is "".
 func WithPrefix(prefix string) Option {
 	return func(h *Handler) { h.prefix = strings.TrimRight(prefix, "/") }
+}
+
+// WithBaseURL sets the catalog's canonical absolute base URL (e.g.
+// "https://books.example.com"), used wherever the handler embeds an absolute
+// URL: the OpenSearch search template and the Authentication Document id and
+// Link header. A trailing slash is trimmed.
+//
+// When unset, the base is derived per request from the Host header, the TLS
+// state, and — when present — the X-Forwarded-Proto and X-Forwarded-Host
+// headers. All of those are client-controlled: the derived form is only
+// trustworthy behind a reverse proxy that overwrites (or strips) the
+// forwarded headers. A handler exposed directly to clients should set
+// WithBaseURL so a spoofed Host or X-Forwarded-Host cannot plant an
+// attacker-controlled host in served documents (a cache-poisoning vector for
+// deployments with a shared cache in front).
+func WithBaseURL(base string) Option {
+	return func(h *Handler) { h.base = strings.TrimRight(base, "/") }
 }
 
 // WithDefaultVersion sets the OPDS version used when a client expresses no
@@ -286,7 +304,7 @@ func (h *Handler) serveSearch(w http.ResponseWriter, r *http.Request) {
 		Title:   q.Get("title"),
 		Page:    pageParam(r),
 		Version: v,
-		BaseURL: baseURL(r),
+		BaseURL: h.baseURL(r),
 		Query:   q,
 	}
 	feed, err := h.searcher.Search(r.Context(), req)
@@ -360,7 +378,7 @@ func (h *Handler) serveOpenSearch(w http.ResponseWriter, r *http.Request) {
 	desc := h.searcher.SearchDescription()
 	template := desc.Template
 	if template == "" {
-		template = baseURL(r) + h.SearchURL() + "?q={searchTerms}"
+		template = h.baseURL(r) + h.SearchURL() + "?q={searchTerms}"
 	}
 	body, err := opensearch.Marshal(opensearch.Description{
 		ShortName:   desc.ShortName,
@@ -379,7 +397,7 @@ func (h *Handler) feedRequest(r *http.Request, id string, v opds.Version) opds.F
 		ID:      id,
 		Page:    pageParam(r),
 		Version: v,
-		BaseURL: baseURL(r),
+		BaseURL: h.baseURL(r),
 		Query:   r.URL.Query(),
 	}
 }
@@ -645,7 +663,14 @@ func pageParam(r *http.Request) int {
 	return 1
 }
 
-func baseURL(r *http.Request) string {
+// baseURL returns the catalog's absolute base URL: the one configured with
+// WithBaseURL, or else a base derived from the request. The derived values
+// (Host, X-Forwarded-Proto, X-Forwarded-Host) are client-controlled and only
+// trustworthy behind a proxy that sets or strips them; see WithBaseURL.
+func (h *Handler) baseURL(r *http.Request) string {
+	if h.base != "" {
+		return h.base
+	}
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"

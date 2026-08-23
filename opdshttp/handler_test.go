@@ -469,6 +469,28 @@ func TestBaseURLHonorsForwardedHost(t *testing.T) {
 	}
 }
 
+// A configured base URL wins over everything request-derived, so a spoofed
+// Host or X-Forwarded-* header cannot plant its host in served documents.
+func TestWithBaseURLOverridesRequestDerivation(t *testing.T) {
+	h := opdshttp.New(memSource{prefix: "/opds"},
+		opdshttp.WithPrefix("/opds"),
+		opdshttp.WithBaseURL("https://books.example.com/"),
+	)
+	r := httptest.NewRequest(http.MethodGet, "/opds/opensearch.xml", nil)
+	r.Host = "attacker.example"
+	r.Header.Set("X-Forwarded-Proto", "gopher")
+	r.Header.Set("X-Forwarded-Host", "evil.example")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	body := w.Body.String()
+	if !strings.Contains(body, "https://books.example.com/opds/search") {
+		t.Errorf("template does not use the configured base:\n%s", body)
+	}
+	if strings.Contains(body, "attacker.example") || strings.Contains(body, "evil.example") {
+		t.Errorf("request-derived host leaked past WithBaseURL:\n%s", body)
+	}
+}
+
 func TestSearchDisabledWithoutSearcher(t *testing.T) {
 	// Wrapping in a struct that embeds only opds.Source hides the Searcher
 	// methods, so the handler must not enable search.
