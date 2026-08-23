@@ -15,7 +15,7 @@ serializes it to either supported wire format, chosen by content negotiation:
 No runtime dependencies — the library itself uses only the Go standard
 library. (A single test-only dependency,
 [`santhosh-tekuri/jsonschema`](https://github.com/santhosh-tekuri/jsonschema),
-powers the OPDS 2.0 conformance tests; it never appears in your builds.)
+powers the JSON conformance tests; it never appears in your builds.)
 
 ## Install
 
@@ -31,7 +31,7 @@ go get github.com/ophymx/opds
 | `opds/opds1` | Encodes the model to OPDS 1.2 (Atom XML). |
 | `opds/opds2` | Encodes the model to OPDS 2.0 (JSON). |
 | `opds/opensearch` | Generates OpenSearch description documents (1.x search). |
-| `opds/opdshttp` | Embeddable `http.Handler`: routing, content negotiation, pagination, search. |
+| `opds/opdshttp` | Embeddable `http.Handler`: routing, content negotiation, pagination, search, Basic authentication, progression sync. |
 
 ## Quick start
 
@@ -183,6 +183,46 @@ ignore it and serve full-size images. PSE is an OPDS **1.x** extension with no
 2.0 mapping: the `opds2` encoder omits it and 2.0 clients fall back to the
 acquisition links.
 
+## Authentication and progression sync
+
+`WithAuth` puts the catalog behind HTTP Basic authentication. You supply the
+credential check (an `Authenticator` — a password file, a database, an
+upstream service); the library answers unauthenticated requests with both
+things real clients need:
+
+- a `WWW-Authenticate: Basic` challenge, which is all that header-only clients
+  such as KOReader and Foliate require, and
+- an [OPDS Authentication Document](https://drafts.opds.io/authentication-for-opds-1.0.html)
+  as the 401 body (and at `{prefix}/auth`), which clients such as Thorium and
+  Cantook render as a native login dialog.
+
+```go
+h := opdshttp.New(catalog{},
+	opdshttp.WithPrefix("/opds"),
+	opdshttp.WithAuth(myAuth{}, opdshttp.AuthDocument{
+		Title:       "My Library", // also used as the Basic realm
+		Description: "Sign in with your library account.",
+	}),
+	opdshttp.WithProgression(store), // requires WithAuth
+)
+```
+
+The authenticated identity reaches your `Source` through the request context:
+`user, ok := opdshttp.User(ctx)`.
+
+`WithProgression` adds per-user reading-position sync per the
+[OPDS Progression 1.0 draft](https://drafts.opds.io/opds-progression-1.0.html):
+every publication is advertised with a progression link, and the handler
+serves GET/PUT at `{prefix}/progression/{id}` through the `ProgressionStore`
+interface you supply, keyed by user and `Publication.ID`
+(`NewMemProgressionStore` covers tests and examples). The same endpoint and
+store also answer the pre-spec Cantook rel
+(`http://www.cantook.com/api/progression`, the Readium-locator shape) that
+Komga and Stump serve and the Cantook/Aldiko client family consumes.
+
+Try it live: `go run ./examples/bookstore --auth` (user `demo`, password
+`demo`).
+
 ## Content negotiation
 
 The handler picks the version per request, in priority order:
@@ -205,6 +245,8 @@ The handler picks the version per request, in priority order:
 {prefix}/search            search results
 {prefix}/opensearch.xml    OpenSearch description
 {prefix}/page/{id}         a page image (OPDS-PSE, if the Source is a PageSource)
+{prefix}/auth              the Authentication Document (with WithAuth)
+{prefix}/progression/{id}  per-user reading progression, GET/PUT (with WithProgression)
 ```
 
 ## Using the encoders directly
@@ -231,6 +273,11 @@ hand-written expectations:
   reference validator behind the official OPDS validator. These tests need a JRE
   and skip automatically when Java/Jing are absent, so `go test ./...` still
   passes everywhere.
+- **Authentication Documents and Progression Documents** emitted by `opdshttp`
+  are validated against the official schemas from
+  [drafts.opds.io](https://drafts.opds.io) (vendored, with the pinned draft
+  revision recorded in `opdshttp/testdata/schema/SOURCES.md`), and their exact
+  serializations are locked with golden files.
 
 To run the 1.2 RELAX NG tests, which fetch Jing into `tools/` on first run:
 

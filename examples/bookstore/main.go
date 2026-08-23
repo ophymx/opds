@@ -12,10 +12,23 @@
 //	curl -H 'Accept: application/opds+json' localhost:8080/opds/   # 2.0
 //	curl 'localhost:8080/opds/?version=2'                  # 2.0 via query
 //	curl 'localhost:8080/opds/search?q=go'
+//
+// With --auth the catalog requires HTTP Basic credentials (demo/demo), serves
+// the OPDS Authentication Document, and syncs per-user reading progression —
+// the live interop target for clients like Thorium and Cantook:
+//
+//	go run ./examples/bookstore --auth
+//	curl localhost:8080/opds/                              # 401 + auth document
+//	curl -u demo:demo localhost:8080/opds/
+//	curl -u demo:demo localhost:8080/opds/progression/urn:isbn:9781503280786
+//	curl -u demo:demo -X PUT -d '{"modified":"2026-08-22T10:00:00Z",
+//	  "device":{"id":"urn:uuid:1","name":"curl"},"progression":0.5}' \
+//	  localhost:8080/opds/progression/urn:isbn:9781503280786
 package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"net/http"
 	"strings"
@@ -126,18 +139,45 @@ func toPublication(b book) opds.Publication {
 	return *p
 }
 
+// demoAuth authenticates the fixed demo user.
+type demoAuth struct{}
+
+func (demoAuth) Authenticate(username, password string) (string, error) {
+	if username == "demo" && password == "demo" {
+		return "demo", nil
+	}
+	return "", opdshttp.ErrInvalidCredentials
+}
+
 func main() {
-	h := opdshttp.New(catalog{},
+	auth := flag.Bool("auth", false, "require Basic authentication (demo/demo) and enable progression sync")
+	addr := flag.String("addr", ":8080", "listen address")
+	flag.Parse()
+
+	opts := []opdshttp.Option{
 		opdshttp.WithPrefix(prefix),
 		opdshttp.WithDefaultVersion(opds.Version1),
-	)
+	}
+	if *auth {
+		opts = append(opts,
+			opdshttp.WithAuth(demoAuth{}, opdshttp.AuthDocument{
+				Title:       "Example Bookstore",
+				Description: `Sign in with the demo account: user "demo", password "demo".`,
+				Links: []opds.Link{
+					{Rel: "help", Href: "https://github.com/ophymx/opds"},
+				},
+			}),
+			opdshttp.WithProgression(opdshttp.NewMemProgressionStore()),
+		)
+		log.Printf(`authentication enabled: user "demo", password "demo"`)
+	}
+	h := opdshttp.New(catalog{}, opts...)
 	mux := http.NewServeMux()
 	mux.Handle(prefix+"/", h)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, prefix+"/", http.StatusFound)
 	})
 
-	addr := ":8080"
-	log.Printf("OPDS bookstore listening on http://localhost%s%s/", addr, prefix)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Printf("OPDS bookstore listening on http://localhost%s%s/", *addr, prefix)
+	log.Fatal(http.ListenAndServe(*addr, mux))
 }

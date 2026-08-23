@@ -1,0 +1,1 @@
+{"id":"https://books.example.com/opds/auth","title":"Family Library","description":"Sign in with your library account.","links":[{"rel":"help","href":"mailto:help@example.com"},{"rel":"register","href":"https://example.com/register","type":"text/html"}],"authentication":[{"type":"http://opds-spec.org/auth/basic","labels":{"login":"Account","password":"PIN"}}]}
