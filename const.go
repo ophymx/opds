@@ -16,6 +16,10 @@ const (
 
 	// MediaTypeOpenSearch is the media type of an OpenSearch description document.
 	MediaTypeOpenSearch = "application/opensearchdescription+xml"
+
+	// MediaTypeAuthDocument is the media type of an OPDS Authentication Document
+	// (see https://drafts.opds.io/authentication-for-opds-1.0.html).
+	MediaTypeAuthDocument = "application/opds-authentication+json"
 )
 
 // XML namespace URIs used by OPDS 1.x (Atom) feeds.
@@ -54,6 +58,10 @@ const (
 	// RelPageStream is the OPDS-PSE page streaming relation (see PageStream).
 	RelPageStream = "http://vaemendis.net/opds-pse/stream"
 
+	// RelAuthDocument advertises the catalog's OPDS Authentication Document
+	// (see opdshttp.WithAuth).
+	RelAuthDocument = "http://opds-spec.org/auth/document"
+
 	RelFacet         = "http://opds-spec.org/facet"
 	RelGroup         = "http://opds-spec.org/group"
 	RelSortNew       = "http://opds-spec.org/sort/new"
@@ -63,6 +71,13 @@ const (
 	RelShelf         = "http://opds-spec.org/shelf"
 	RelSubscriptions = "http://opds-spec.org/subscriptions"
 	RelCrawlable     = "http://opds-spec.org/crawlable"
+)
+
+// Authentication flow type URIs used in an OPDS Authentication Document
+// (see https://drafts.opds.io/authentication-for-opds-1.0.html).
+const (
+	// AuthFlowBasic is the HTTP Basic Authentication flow.
+	AuthFlowBasic = "http://opds-spec.org/auth/basic"
 )
 
 // AcquisitionRel identifies how a publication may be acquired. The values are

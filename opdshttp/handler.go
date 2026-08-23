@@ -1,6 +1,7 @@
 // Package opdshttp provides an embeddable http.Handler that exposes an
 // opds.Source as an OPDS catalog, handling routing, content negotiation
-// between OPDS 1.2 and 2.0, pagination, and search.
+// between OPDS 1.2 and 2.0, pagination, search, and optional HTTP Basic
+// authentication (see WithAuth).
 //
 // The handler serves this URL layout, relative to its mount Prefix:
 //
@@ -10,6 +11,7 @@
 //	{prefix}/search           search results (if the Source is an opds.Searcher)
 //	{prefix}/opensearch.xml   the OpenSearch description document
 //	{prefix}/page/{id}        a single page image (if the Source is an opds.PageSource)
+//	{prefix}/auth             the OPDS Authentication Document (if WithAuth is configured)
 //
 // Use FeedPath, PublicationPath, SearchPath and PageStreamPath (or the
 // Handler's URL methods) to build hrefs in your Source that match this layout.
@@ -26,6 +28,7 @@
 package opdshttp
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -45,6 +48,8 @@ type Handler struct {
 	src            opds.Source
 	searcher       opds.Searcher
 	pages          opds.PageSource
+	auth           Authenticator
+	authDoc        AuthDocument
 	prefix         string
 	defaultVersion opds.Version
 	errorHandler   func(http.ResponseWriter, *http.Request, error)
@@ -164,6 +169,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	rest := strings.TrimPrefix(r.URL.Path, h.prefix)
 	rest = strings.TrimPrefix(rest, "/")
+
+	// The Authentication Document is how a client learns to authenticate, so
+	// it is the one route served without credentials.
+	if rest == "auth" {
+		if h.auth == nil {
+			http.NotFound(w, r)
+			return
+		}
+		h.writeAuthDocument(w, r, http.StatusOK)
+		return
+	}
+	if h.auth != nil {
+		user, ok := h.authenticate(w, r)
+		if !ok {
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), userKey{}, user))
+	}
 
 	switch {
 	case rest == "" || rest == "/":
@@ -409,6 +432,13 @@ func (h *Handler) ensureLinks(r *http.Request, f *opds.Feed, v opds.Version) {
 				Type: opds.MediaTypeOpenSearch,
 			})
 		}
+	}
+	if h.auth != nil && !hasRel(f.Links, opds.RelAuthDocument) {
+		f.Links = append(f.Links, opds.Link{
+			Rel:  opds.RelAuthDocument,
+			Href: h.AuthURL(),
+			Type: opds.MediaTypeAuthDocument,
+		})
 	}
 }
 

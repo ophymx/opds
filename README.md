@@ -248,6 +248,13 @@ Vendored schema provenance (and the one documented upstream-typo fix in
 - Acquisition model including prices, nested indirect acquisition, and library
   lending (availability/holds/copies).
 - Facets, groups, pagination, OpenSearch.
+- HTTP Basic authentication via
+  [Authentication for OPDS 1.0](https://drafts.opds.io/authentication-for-opds-1.0.html)
+  (`opdshttp.WithAuth`): 401 responses carry both a `WWW-Authenticate: Basic`
+  challenge (for clients like KOReader and Foliate) and an Authentication
+  Document body (for clients like Thorium and Cantook), feeds advertise the
+  document link, and the authenticated identity reaches your `Source` via
+  `opdshttp.User`.
 - Page streaming for comics/manga via
   [OPDS-PSE](https://anansi-project.github.io/docs/opds-pse/intro) 1.2
   (`pse:count`, `pse:lastRead`, `pse:lastReadDate`) — 1.x feeds only, like the
@@ -261,14 +268,15 @@ standard in OPDS 2.0 but are *not* part of the official OPDS 1.2 RELAX NG schema
 emits them in both versions because real library clients rely on them; just be
 aware that a 1.2 feed using them intentionally goes beyond the core 1.2 schema.
 
-Not yet included: the OPDS Authentication document flow (the model leaves room
-for it). Contributions welcome.
+Not yet included: reading-progression sync (the OPDS Progression draft).
+Contributions welcome.
 
 ## References
 
 - [OPDS 1.2 specification](https://specs.opds.io/opds-1.2)
 - [OPDS 2.0 specification](https://drafts.opds.io/opds-2.0)
 - [OPDS-PSE specification](https://anansi-project.github.io/docs/opds-pse/specs/v1.2)
+- [Authentication for OPDS 1.0](https://drafts.opds.io/authentication-for-opds-1.0.html)
 - [Readium Web Publication Manifest](https://readium.org/webpub-manifest/)
 - [OpenSearch 1.1](https://github.com/dewitt/opensearch)
 
