@@ -255,9 +255,7 @@ func TestConcurrentWrites(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 20 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			p := sample(ts.Add(time.Duration(i) * time.Second))
 			if err := s.SetProgression(ctx, "jane", "urn:b1", p); err != nil {
 				t.Error(err)
@@ -265,7 +263,7 @@ func TestConcurrentWrites(t *testing.T) {
 			if err := s.SetLastRead(ctx, "jane", "urn:b1", i+1, ts); err != nil {
 				t.Error(err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if got, err := s.Progression(ctx, "jane", "urn:b1"); err != nil || got.Progression != 0.42 {
