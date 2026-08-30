@@ -205,9 +205,17 @@ func buildLinks(links []opds.Link) []jsonLink {
 	}
 	out := make([]jsonLink, 0, len(links))
 	for _, l := range links {
-		out = append(out, jsonLink{
+		jl := jsonLink{
 			Rel: relValue(l.Rel), Href: l.Href, Type: l.Type, Title: l.Title, Templated: l.Templated,
-		})
+		}
+		if a := l.Authenticate; a != nil && a.Href != "" {
+			typ := a.Type
+			if typ == "" {
+				typ = opds.MediaTypeAuthDocument
+			}
+			jl.Properties = &jsonProperties{Authenticate: &jsonAuthenticate{Href: a.Href, Type: typ}}
+		}
+		out = append(out, jl)
 	}
 	return out
 }

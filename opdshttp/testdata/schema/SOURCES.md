@@ -15,8 +15,9 @@ are vendored so the tests run offline.
 
 The Progression spec is a young draft (created 2026-01-27, revised four times
 through 2026-02-23). The implementation and this schema were pinned against
-the draft **as published on 2026-08-22**; re-diff the draft against this date
-before tagging a release.
+the draft **as published on 2026-08-22** and re-diffed against it on
+**2026-08-30** (schema byte-identical, prose unchanged); re-diff the draft
+against the latter date before tagging a release.
 
 ## Refs
 

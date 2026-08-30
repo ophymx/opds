@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ophymx/opds"
 	"github.com/ophymx/opds/opds1"
@@ -58,6 +59,9 @@ type Handler struct {
 	defaultVersion opds.Version
 	errorHandler   func(http.ResponseWriter, *http.Request, error)
 
+	// progSkew bounds how far ahead of the server a submitted progression
+	// timestamp may be (see WithProgressionSkew); <= 0 disables the check.
+	progSkew time.Duration
 	// progLocks stripes the progression PUT check-then-set by (user,
 	// publication) so a stale update cannot race past the 409 check.
 	progLocks [64]sync.Mutex
@@ -107,7 +111,7 @@ func WithErrorHandler(fn func(http.ResponseWriter, *http.Request, error)) Option
 // in feeds automatically. If src also implements opds.PageSource, the
 // page-image endpoint behind OPDS-PSE stream links is enabled.
 func New(src opds.Source, opts ...Option) *Handler {
-	h := &Handler{src: src, defaultVersion: opds.Version1}
+	h := &Handler{src: src, defaultVersion: opds.Version1, progSkew: DefaultProgressionSkew}
 	if s, ok := src.(opds.Searcher); ok {
 		h.searcher = s
 	}
@@ -204,6 +208,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			allow = "GET, HEAD, PUT"
 		}
 		w.Header().Set("Allow", allow)
+		if allowPut {
+			// The draft requires a Problem Details payload for every error
+			// this endpoint reports other than 401.
+			writeProblemDetail(w, http.StatusMethodNotAllowed, "", "Method not allowed.")
+			return
+		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -520,19 +530,28 @@ func (h *Handler) progressionLink(links []opds.Link, id string) []opds.Link {
 		return links
 	}
 	path := ProgressionPath(h.prefix, url.PathEscape(id))
+	// The endpoint always requires credentials, so the draft's authenticate
+	// hint is always warranted: it points 2.0 clients straight at the
+	// Authentication Document instead of costing them a 401 round-trip.
+	var hint *opds.AuthenticateHint
+	if h.auth != nil {
+		hint = &opds.AuthenticateHint{Href: h.AuthURL(), Type: opds.MediaTypeAuthDocument}
+	}
 	var add []opds.Link
 	if !hasRel(links, opds.RelProgression) {
 		add = append(add, opds.Link{
-			Rel:  opds.RelProgression,
-			Href: path,
-			Type: opds.MediaTypeProgression,
+			Rel:          opds.RelProgression,
+			Href:         path,
+			Type:         opds.MediaTypeProgression,
+			Authenticate: hint,
 		})
 	}
 	if !hasRel(links, opds.RelProgressionCantook) {
 		add = append(add, opds.Link{
-			Rel:  opds.RelProgressionCantook,
-			Href: path + "?format=readium",
-			Type: opds.MediaTypeProgressionReadium,
+			Rel:          opds.RelProgressionCantook,
+			Href:         path + "?format=readium",
+			Type:         opds.MediaTypeProgressionReadium,
+			Authenticate: hint,
 		})
 	}
 	if len(add) == 0 {

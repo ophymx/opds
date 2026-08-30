@@ -149,6 +149,22 @@ type Link struct {
 	Title string
 	// Templated indicates Href is an RFC 6570 URI template (2.0 only).
 	Templated bool
+	// Authenticate optionally hints that the target requires authentication,
+	// pointing at the Authentication Document a client should use. It saves
+	// the client an unauthenticated round-trip, and is emitted as the link's
+	// properties.authenticate in 2.0 only — OPDS 1.x Atom links have no
+	// properties, so 1.x feeds advertise the target without the hint.
+	Authenticate *AuthenticateHint
+}
+
+// AuthenticateHint points at an OPDS Authentication Document
+// (https://drafts.opds.io/authentication-for-opds-1.0.html) describing how to
+// authenticate for a Link whose target requires it.
+type AuthenticateHint struct {
+	// Href is the Authentication Document's URL. Required.
+	Href string
+	// Type is its media type; it defaults to MediaTypeAuthDocument.
+	Type string
 }
 
 // Image is a cover image or thumbnail.
