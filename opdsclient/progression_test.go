@@ -251,7 +251,8 @@ func TestSetProgressionValidatesLocally(t *testing.T) {
 	if err == nil {
 		t.Error("want an error for a progression outside [0, 1]")
 	}
-	if _, ok := errors.AsType[*opdsclient.Error](err); ok {
+	var httpErr *opdsclient.Error
+	if errors.As(err, &httpErr) {
 		t.Errorf("err = %#v, want it caught before the request", err)
 	}
 }

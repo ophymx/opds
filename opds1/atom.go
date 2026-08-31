@@ -85,13 +85,13 @@ func buildFeed(f *opds.Feed) atomFeed {
 	}
 
 	if f.TotalResults > 0 {
-		doc.TotalResults = new(f.TotalResults)
+		doc.TotalResults = ptr(f.TotalResults)
 	}
 	if f.ItemsPerPage > 0 {
-		doc.ItemsPerPage = new(f.ItemsPerPage)
+		doc.ItemsPerPage = ptr(f.ItemsPerPage)
 	}
 	if f.StartIndex > 0 {
-		doc.StartIndex = new(f.StartIndex)
+		doc.StartIndex = ptr(f.StartIndex)
 	}
 
 	for _, n := range f.Navigation {
@@ -192,11 +192,11 @@ func buildPageStream(ps opds.PageStream) atomLink {
 		Href: ps.Href,
 		Type: ps.Type,
 		// pse:count is required: KOReader renders only the first page without it.
-		PSECount: new(ps.PageCount),
+		PSECount: ptr(ps.PageCount),
 	}
 	// lastReadDate qualifies lastRead, so neither is emitted without a page.
 	if ps.LastRead > 0 {
-		l.PSELastRead = new(ps.LastRead)
+		l.PSELastRead = ptr(ps.LastRead)
 		l.PSELastReadDate = formatTimeOrEmpty(ps.LastReadDate)
 	}
 	return l
@@ -250,10 +250,10 @@ func buildAcquisition(a opds.Acquisition) atomLink {
 		}
 	}
 	if h := a.Holds; h != nil {
-		l.Holds = &atomHolds{Total: new(h.Total), Position: h.Position}
+		l.Holds = &atomHolds{Total: ptr(h.Total), Position: h.Position}
 	}
 	if c := a.Copies; c != nil {
-		l.Copies = &atomCopies{Total: new(c.Total), Available: new(c.Available)}
+		l.Copies = &atomCopies{Total: ptr(c.Total), Available: ptr(c.Available)}
 	}
 	return l
 }
@@ -281,7 +281,7 @@ func buildFacet(f opds.Facet) atomLink {
 		l.ActiveFacet = "true"
 	}
 	if f.Count > 0 {
-		l.Count = new(f.Count)
+		l.Count = ptr(f.Count)
 	}
 	return l
 }
@@ -311,6 +311,11 @@ func when(t, fallback time.Time) time.Time {
 	}
 	return t
 }
+
+// ptr returns a pointer to a copy of v. The XML shapes use pointers for the
+// counts that must be emitted even when zero, and a pointer to a value is not
+// something a composite literal can take directly.
+func ptr[T any](v T) *T { return &v }
 
 func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
