@@ -16,14 +16,14 @@ type jsonFeed struct {
 }
 
 type jsonMetadata struct {
-	Type          string `json:"@type,omitempty"`
-	Title         string `json:"title"`
-	Subtitle      string `json:"subtitle,omitempty"`
-	Identifier    string `json:"identifier,omitempty"`
-	Modified      string `json:"modified,omitempty"`
-	NumberOfItems int    `json:"numberOfItems,omitempty"`
-	ItemsPerPage  int    `json:"itemsPerPage,omitempty"`
-	CurrentPage   int    `json:"currentPage,omitempty"`
+	Type          string    `json:"@type,omitempty"`
+	Title         localized `json:"title"`
+	Subtitle      localized `json:"subtitle,omitempty"`
+	Identifier    string    `json:"identifier,omitempty"`
+	Modified      string    `json:"modified,omitempty"`
+	NumberOfItems int       `json:"numberOfItems,omitempty"`
+	ItemsPerPage  int       `json:"itemsPerPage,omitempty"`
+	CurrentPage   int       `json:"currentPage,omitempty"`
 }
 
 type jsonGroup struct {
@@ -105,19 +105,19 @@ type jsonPublication struct {
 }
 
 type jsonPubMetadata struct {
-	Type        string        `json:"@type,omitempty"`
-	Title       string        `json:"title"`
-	SortAs      string        `json:"sortAs,omitempty"`
-	Identifier  string        `json:"identifier,omitempty"`
-	Author      []contributor `json:"author,omitempty"`
-	Contributor []contributor `json:"contributor,omitempty"`
-	Publisher   string        `json:"publisher,omitempty"`
-	Language    []string      `json:"language,omitempty"`
-	Subject     []subject     `json:"subject,omitempty"`
-	Modified    string        `json:"modified,omitempty"`
-	Published   string        `json:"published,omitempty"`
-	Description string        `json:"description,omitempty"`
-	BelongsTo   *belongsTo    `json:"belongsTo,omitempty"`
+	Type        string       `json:"@type,omitempty"`
+	Title       localized    `json:"title"`
+	SortAs      localized    `json:"sortAs,omitempty"`
+	Identifier  string       `json:"identifier,omitempty"`
+	Author      contributors `json:"author,omitempty"`
+	Contributor contributors `json:"contributor,omitempty"`
+	Publisher   publisher    `json:"publisher,omitempty"`
+	Language    languages    `json:"language,omitempty"`
+	Subject     subjects     `json:"subject,omitempty"`
+	Modified    string       `json:"modified,omitempty"`
+	Published   string       `json:"published,omitempty"`
+	Description localized    `json:"description,omitempty"`
+	BelongsTo   *belongsTo   `json:"belongsTo,omitempty"`
 }
 
 type belongsTo struct {

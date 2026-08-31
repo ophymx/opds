@@ -7,12 +7,12 @@ import (
 	"hash/fnv"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ophymx/opds"
+	"github.com/ophymx/opds/internal/wire"
 )
 
 // ProgressionStore is the per-user reading-position backend an application
@@ -177,10 +177,10 @@ func (h *Handler) serveProgression(w http.ResponseWriter, r *http.Request, id st
 		ct   = opds.MediaTypeProgression
 	)
 	if readium {
-		body, err = marshalReadiumProgression(p)
+		body, err = wire.MarshalReadiumProgression(p)
 		ct = opds.MediaTypeProgressionReadium
 	} else {
-		body, err = marshalProgression(p)
+		body, err = wire.MarshalProgression(p)
 	}
 	if err != nil {
 		h.handleProgressionError(w, r, err)
@@ -212,9 +212,9 @@ func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, i
 	}
 	var p *opds.Progression
 	if readium {
-		p, err = unmarshalReadiumProgression(body)
+		p, err = wire.ParseReadiumProgression(body)
 	} else {
-		p, err = unmarshalProgression(body)
+		p, err = parseProgression(body)
 	}
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, problemProgressionInvalid)
@@ -254,7 +254,7 @@ func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, i
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	out, err := marshalProgression(p)
+	out, err := wire.MarshalProgression(p)
 	if err != nil {
 		h.handleProgressionError(w, r, err)
 		return
@@ -328,258 +328,21 @@ func (h *Handler) handleProgressionError(w http.ResponseWriter, r *http.Request,
 	writeProblemDetail(w, http.StatusInternalServerError, "", "Progression could not be retrieved or updated.")
 }
 
-// Wire shape of a Progression Document. Progression is a pointer so a missing
-// field is distinguishable from a legitimate 0.
-type progressionJSON struct {
-	Title       string     `json:"title,omitempty"`
-	Modified    string     `json:"modified"`
-	Device      deviceJSON `json:"device"`
-	Progression *float64   `json:"progression"`
-	References  []string   `json:"references,omitempty"`
-}
+// The progression documents themselves are encoded by internal/wire, shared
+// with opdsclient so the two sides of the protocol cannot drift. Parsing is
+// split from validation there: a server validates what it accepts, a client
+// stays lenient about what it reads.
 
-type deviceJSON struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-func marshalProgression(p *opds.Progression) ([]byte, error) {
-	v := p.Progression
-	id, name := normalizeDevice(p.Device)
-	return json.Marshal(progressionJSON{
-		Title:       p.Title,
-		Modified:    p.Modified.UTC().Format(time.RFC3339),
-		Device:      deviceJSON{ID: id, Name: name},
-		Progression: &v,
-		References:  p.References,
-	})
-}
-
-// Placeholders for a device a stored progression cannot name. The URN is
-// under the "opds" informal namespace and is only ever emitted, never
-// interpreted.
-const (
-	unknownDeviceID   = "urn:opds:device:unknown"
-	unknownDeviceName = "Unknown device"
-)
-
-// normalizeDevice coerces a device into the shape the draft's schema requires
-// of a served document: an absolute-URI id and a non-empty name. A draft-path
-// PUT is validated up front and never needs this; it exists for records that
-// reached the store some other way — through the lenient Cantook alias, or
-// from an application's own writes and migrations — so that no such record can
-// make the handler serve a document that fails the published schema. A bare
-// UUID (the id Komga and Stump hand out) becomes the urn:uuid: form the draft
-// itself uses in every example; anything else opaque is wrapped in a URN whose
-// escaped tail preserves the original bytes.
-func normalizeDevice(d opds.Device) (id, name string) {
-	id, name = d.ID, d.Name
-	if name == "" {
-		name = unknownDeviceName
-	}
-	switch {
-	case id == "":
-		id = unknownDeviceID
-	case absoluteURI(id):
-	case isUUID(id):
-		id = "urn:uuid:" + id
-	default:
-		id = "urn:opds:device:" + url.PathEscape(id)
-	}
-	return id, name
-}
-
-// absoluteURI reports whether s is a URI with a scheme, which is what the
-// draft's schema means by "format": "uri" for a device id.
-func absoluteURI(s string) bool {
-	u, err := url.Parse(s)
-	return err == nil && u.Scheme != "" && u.IsAbs()
-}
-
-// isUUID reports whether s is a plain 8-4-4-4-12 hex UUID.
-func isUUID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i, c := range s {
-		switch i {
-		case 8, 13, 18, 23:
-			if c != '-' {
-				return false
-			}
-		default:
-			if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// validReferences reports whether every reference parses as a URI reference,
-// which the draft's schema requires of the documents this handler serves. An
-// empty entry refines nothing and is treated as a mistake.
-func validReferences(refs []string) bool {
-	for _, ref := range refs {
-		if ref == "" {
-			return false
-		}
-		if _, err := url.Parse(ref); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
-// unmarshalProgression parses and validates a Progression Document, enforcing
-// the required fields and progression ∈ [0, 1].
-func unmarshalProgression(body []byte) (*opds.Progression, error) {
-	var doc progressionJSON
-	if err := json.Unmarshal(body, &doc); err != nil {
+// parseProgression parses and validates a submitted Progression Document.
+func parseProgression(body []byte) (*opds.Progression, error) {
+	p, err := wire.ParseProgression(body)
+	if err != nil {
 		return nil, err
 	}
-	if doc.Progression == nil || *doc.Progression < 0 || *doc.Progression > 1 {
-		return nil, errors.New("opdshttp: progression missing or outside [0, 1]")
-	}
-	modified, err := time.Parse(time.RFC3339, doc.Modified)
-	if err != nil {
-		return nil, errors.New("opdshttp: progression modified missing or not RFC 3339")
-	}
-	if doc.Device.ID == "" || doc.Device.Name == "" {
-		return nil, errors.New("opdshttp: progression device id and name are required")
-	}
-	// The schema types device.id as a URI. Enforcing it on the way in is what
-	// keeps every document this handler later serves for the record valid,
-	// and it costs a client nothing: the draft's own examples are all urn:uuid
-	// or https.
-	if !absoluteURI(doc.Device.ID) {
-		return nil, errors.New("opdshttp: progression device id must be an absolute URI")
-	}
-	if !validReferences(doc.References) {
-		return nil, errors.New("opdshttp: progression references must be URI references")
-	}
-	return &opds.Progression{
-		Progression: *doc.Progression,
-		Modified:    modified,
-		Device:      opds.Device{ID: doc.Device.ID, Name: doc.Device.Name},
-		Title:       doc.Title,
-		References:  doc.References,
-	}, nil
-}
-
-// Wire shape of the pre-spec Cantook/Readium progression document, as served
-// by Komga (R2Progression) and Stump and consumed by Cantook/Aldiko: a Readium
-// Locator (https://readium.org/architecture/schema/locator.schema.json) under
-// "locator" instead of the draft's flat fields.
-type (
-	readiumProgressionJSON struct {
-		Modified string             `json:"modified"`
-		Device   deviceJSON         `json:"device"`
-		Locator  readiumLocatorJSON `json:"locator"`
-	}
-	readiumLocatorJSON struct {
-		Href      string                `json:"href,omitempty"`
-		Type      string                `json:"type,omitempty"`
-		Title     string                `json:"title,omitempty"`
-		Locations *readiumLocationsJSON `json:"locations,omitempty"`
-	}
-	readiumLocationsJSON struct {
-		Fragments        []string `json:"fragments,omitempty"`
-		Position         *int     `json:"position,omitempty"`
-		Progression      *float64 `json:"progression,omitempty"`
-		TotalProgression *float64 `json:"totalProgression,omitempty"`
-	}
-)
-
-// marshalReadiumProgression translates a stored Progression into the Cantook
-// document. Modified, device, title and the publication-level progression
-// (locations.totalProgression) map directly; the locator href and fragments
-// are reconstructed from References when they share a single resource (the
-// inverse of the mapping unmarshalReadiumProgression applies).
-func marshalReadiumProgression(p *opds.Progression) ([]byte, error) {
-	tp := p.Progression
-	loc := readiumLocatorJSON{
-		Title:     p.Title,
-		Locations: &readiumLocationsJSON{TotalProgression: &tp},
-	}
-	if href, fragments, ok := splitReferences(p.References); ok {
-		loc.Href = href
-		loc.Locations.Fragments = fragments
-	}
-	return json.Marshal(readiumProgressionJSON{
-		Modified: p.Modified.UTC().Format(time.RFC3339),
-		Device:   deviceJSON{ID: p.Device.ID, Name: p.Device.Name},
-		Locator:  loc,
-	})
-}
-
-// unmarshalReadiumProgression parses and validates a Cantook document,
-// translating it to the draft model: locations.totalProgression (required)
-// becomes Progression, and the locator href/fragments become References as
-// media-fragment URIs ("href#fragment"). Resource-level progression and
-// position have no draft equivalent and are dropped. Device is not validated,
-// matching the deployed servers this alias exists to be compatible with.
-func unmarshalReadiumProgression(body []byte) (*opds.Progression, error) {
-	var doc readiumProgressionJSON
-	if err := json.Unmarshal(body, &doc); err != nil {
+	if err := wire.ValidateProgression(p); err != nil {
 		return nil, err
 	}
-	modified, err := time.Parse(time.RFC3339, doc.Modified)
-	if err != nil {
-		return nil, errors.New("opdshttp: progression modified missing or not RFC 3339")
-	}
-	if doc.Locator.Locations == nil || doc.Locator.Locations.TotalProgression == nil {
-		return nil, errors.New("opdshttp: locator.locations.totalProgression is required")
-	}
-	tp := *doc.Locator.Locations.TotalProgression
-	if tp < 0 || tp > 1 {
-		return nil, errors.New("opdshttp: totalProgression outside [0, 1]")
-	}
-	// The locator href may already carry a fragment. Split it off before
-	// joining, so an href like "c1.html#x" cannot produce a second "#" — and
-	// keep that fragment as the reference when locations carries none of its
-	// own.
-	href, hrefFragment, _ := strings.Cut(doc.Locator.Href, "#")
-	fragments := doc.Locator.Locations.Fragments
-	if len(fragments) == 0 && hrefFragment != "" {
-		fragments = []string{hrefFragment}
-	}
-	var refs []string
-	if len(fragments) > 0 {
-		for _, f := range fragments {
-			refs = append(refs, href+"#"+f)
-		}
-	} else if href != "" {
-		refs = []string{href}
-	}
-	if !validReferences(refs) {
-		return nil, errors.New("opdshttp: locator does not yield valid URI references")
-	}
-	return &opds.Progression{
-		Progression: tp,
-		Modified:    modified,
-		Device:      opds.Device{ID: doc.Device.ID, Name: doc.Device.Name},
-		Title:       doc.Locator.Title,
-		References:  refs,
-	}, nil
-}
-
-// splitReferences factors media-fragment URI references into a common resource
-// href and its fragments. It reports false when the references do not share a
-// single resource, in which case they cannot be represented as one locator.
-func splitReferences(refs []string) (href string, fragments []string, ok bool) {
-	for i, ref := range refs {
-		h, frag, _ := strings.Cut(ref, "#")
-		if i == 0 {
-			href = h
-		} else if h != href {
-			return "", nil, false
-		}
-		if frag != "" {
-			fragments = append(fragments, frag)
-		}
-	}
-	return href, fragments, len(refs) > 0
+	return p, nil
 }
 
 // MemProgressionStore is an in-memory ProgressionStore for tests and examples.

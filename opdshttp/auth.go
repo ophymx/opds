@@ -4,13 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/ophymx/opds"
+	"github.com/ophymx/opds/internal/wire"
 )
 
 // ErrInvalidCredentials is the sentinel an Authenticator returns when the
@@ -73,76 +73,13 @@ func (u staticUsers) Authenticate(username, password string) (string, error) {
 
 // AuthDocument configures the OPDS Authentication Document the handler serves:
 // as the body of every 401 response, and at {prefix}/auth (see AuthPath), which
-// is the one route that never requires credentials. The document declares the
-// HTTP Basic flow, which clients such as Thorium and Cantook render as a native
-// login dialog. See https://drafts.opds.io/authentication-for-opds-1.0.html.
-type AuthDocument struct {
-	// ID is the document's canonical URL. Optional: it defaults to the
-	// handler's auth document URL, made absolute from the request.
-	ID string
-	// Title names the catalog access is being requested for. Required; it is
-	// also used as the Basic realm in the WWW-Authenticate challenge.
-	Title string
-	// Description optionally tells the user how to authenticate
-	// (e.g. "Enter your library card number and PIN.").
-	Description string
-	// LoginLabel and PasswordLabel are optional alternate labels for the
-	// credential fields (e.g. "Library card" and "PIN"). Empty means the
-	// client shows its defaults.
-	LoginLabel    string
-	PasswordLabel string
-	// Links are optional associated resources: rel "logo" (an image type),
-	// "help" (a page or mailto: URL), and "register".
-	Links []opds.Link
-}
-
-// Wire shapes of the Authentication Document and its members.
-type (
-	authDocJSON struct {
-		ID             string         `json:"id"`
-		Title          string         `json:"title"`
-		Description    string         `json:"description,omitempty"`
-		Links          []authLinkJSON `json:"links,omitempty"`
-		Authentication []authFlowJSON `json:"authentication"`
-	}
-	authFlowJSON struct {
-		Type   string          `json:"type"`
-		Labels *authLabelsJSON `json:"labels,omitempty"`
-	}
-	authLabelsJSON struct {
-		Login    string `json:"login,omitempty"`
-		Password string `json:"password,omitempty"`
-	}
-	authLinkJSON struct {
-		Rel   string `json:"rel,omitempty"`
-		Href  string `json:"href"`
-		Type  string `json:"type,omitempty"`
-		Title string `json:"title,omitempty"`
-	}
-)
-
-// marshal renders the document with the given id filled in when the configured
-// ID is empty.
-func (d AuthDocument) marshal(id string) ([]byte, error) {
-	if d.ID != "" {
-		id = d.ID
-	}
-	flow := authFlowJSON{Type: opds.AuthFlowBasic}
-	if d.LoginLabel != "" || d.PasswordLabel != "" {
-		flow.Labels = &authLabelsJSON{Login: d.LoginLabel, Password: d.PasswordLabel}
-	}
-	var links []authLinkJSON
-	for _, l := range d.Links {
-		links = append(links, authLinkJSON{Rel: l.Rel, Href: l.Href, Type: l.Type, Title: l.Title})
-	}
-	return json.Marshal(authDocJSON{
-		ID:             id,
-		Title:          d.Title,
-		Description:    d.Description,
-		Links:          links,
-		Authentication: []authFlowJSON{flow},
-	})
-}
+// is the one route that never requires credentials. A document declaring
+// nothing else declares the HTTP Basic flow, which clients such as Thorium and
+// Cantook render as a native login dialog.
+//
+// It is an alias for the version-neutral opds.AuthDocument, which opdsclient
+// parses on the other side of the protocol.
+type AuthDocument = opds.AuthDocument
 
 // WithAuth requires HTTP Basic authentication on every route except the
 // Authentication Document itself. Requests with missing or invalid credentials
@@ -215,7 +152,7 @@ func (h *Handler) writeUnauthorized(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) writeAuthDocument(w http.ResponseWriter, r *http.Request, code int) {
 	docURL := h.baseURL(r) + h.AuthURL()
-	body, err := h.authDoc.marshal(docURL)
+	body, err := wire.MarshalAuthDocument(h.authDoc, docURL)
 	if err != nil {
 		h.handleError(w, r, err)
 		return

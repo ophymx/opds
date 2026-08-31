@@ -35,8 +35,8 @@ func buildFeed(f *opds.Feed) jsonFeed {
 	}
 	doc := jsonFeed{
 		Metadata: jsonMetadata{
-			Title:         f.Title,
-			Subtitle:      f.Subtitle,
+			Title:         localized(f.Title),
+			Subtitle:      localized(f.Subtitle),
 			Identifier:    f.ID,
 			Modified:      formatTime(updated),
 			NumberOfItems: f.TotalResults,
@@ -63,7 +63,7 @@ func buildFeed(f *opds.Feed) jsonFeed {
 }
 
 func buildGroup(g opds.Group) jsonGroup {
-	jg := jsonGroup{Metadata: jsonMetadata{Title: g.Title}}
+	jg := jsonGroup{Metadata: jsonMetadata{Title: localized(g.Title)}}
 	if g.Href != "" {
 		rel := g.Rel
 		jg.Links = []jsonLink{{Rel: relValue(rel), Href: g.Href, Type: g.Type, Title: g.Title}}
@@ -93,7 +93,7 @@ func buildFacets(facets []opds.Facet) []jsonFacetGroup {
 	}
 	out := make([]jsonFacetGroup, 0, len(order))
 	for _, name := range order {
-		fg := jsonFacetGroup{Metadata: jsonMetadata{Title: name}}
+		fg := jsonFacetGroup{Metadata: jsonMetadata{Title: localized(name)}}
 		for _, ft := range byGroup[name] {
 			l := jsonLink{Href: ft.Href, Type: ft.Type, Title: ft.Title}
 			if ft.Count > 0 {
@@ -119,19 +119,19 @@ func buildPublication(p opds.Publication) jsonPublication {
 	jp := jsonPublication{
 		Metadata: jsonPubMetadata{
 			Type:        "http://schema.org/Book",
-			Title:       p.Title,
-			SortAs:      p.SortAs,
+			Title:       localized(p.Title),
+			SortAs:      localized(p.SortAs),
 			Identifier:  firstIdentifier(p),
 			Author:      buildContributors(p.Authors),
 			Contributor: buildContributors(p.Contributors),
-			Publisher:   p.Publisher,
+			Publisher:   publisher(p.Publisher),
 			Language:    p.Languages,
 			Subject:     buildSubjects(p.Subjects),
-			Description: p.Description,
+			Description: localized(p.Description),
 		},
 	}
 	if jp.Metadata.Description == "" {
-		jp.Metadata.Description = p.Summary
+		jp.Metadata.Description = localized(p.Summary)
 	}
 	if !p.Updated.IsZero() {
 		jp.Metadata.Modified = formatTime(p.Updated)
@@ -220,23 +220,23 @@ func buildLinks(links []opds.Link) []jsonLink {
 	return out
 }
 
-func buildContributors(authors []opds.Author) []contributor {
+func buildContributors(authors []opds.Author) contributors {
 	if len(authors) == 0 {
 		return nil
 	}
-	out := make([]contributor, 0, len(authors))
+	out := make(contributors, 0, len(authors))
 	for _, a := range authors {
 		out = append(out, contributor{Name: a.Name, URI: a.URI, Sort: a.SortAs})
 	}
 	return out
 }
 
-func buildSubjects(subjects []opds.Subject) []subject {
-	if len(subjects) == 0 {
+func buildSubjects(subs []opds.Subject) subjects {
+	if len(subs) == 0 {
 		return nil
 	}
-	out := make([]subject, 0, len(subjects))
-	for _, s := range subjects {
+	out := make(subjects, 0, len(subs))
+	for _, s := range subs {
 		out = append(out, subject{Name: s.Name, Code: s.Code, Scheme: s.Scheme})
 	}
 	return out
