@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -27,8 +28,27 @@ type ProgressionStore interface {
 
 	// SetProgression stores p, replacing any existing progression. Staleness
 	// and validity are enforced by the handler before this is called.
+	//
+	// Returning ErrProgressionIncorrectUser or ErrProgressionLocked (possibly
+	// wrapped) makes the handler answer 403 with the draft's matching problem
+	// type, which is how a store refuses a write the handler cannot judge for
+	// itself: a publication the user may read but not track, or one whose
+	// progression has been frozen (a returned loan, an archived title).
 	SetProgression(ctx context.Context, user, publicationID string, p *opds.Progression) error
 }
+
+// Errors a ProgressionStore returns to refuse an operation, mapped to the two
+// 403 responses the draft defines. Any other non-ErrNotFound error is an
+// internal failure.
+var (
+	// ErrProgressionIncorrectUser reports that the progression does not belong
+	// to the authenticated user (403, error#progression-incorrect-user).
+	ErrProgressionIncorrectUser = errors.New("opdshttp: progression belongs to another user")
+
+	// ErrProgressionLocked reports that the publication's progression can no
+	// longer be updated (403, error#progression-locked).
+	ErrProgressionLocked = errors.New("opdshttp: progression is locked")
+)
 
 // WithProgression enables the OPDS Progression 1.0 endpoint
 // (https://drafts.opds.io/opds-progression-1.0.html, as retrieved 2026-08-22)
@@ -37,8 +57,16 @@ type ProgressionStore interface {
 // serves GET and PUT on {prefix}/progression/{id}: GET returns the last-known
 // Progression Document (200 with an empty payload when none is stored), PUT
 // validates and stores one (201 on first store, 200 on update, 400 for an
-// invalid document, 409 when the stored progression is more recent — errors
-// carry an RFC 7807 problem body).
+// invalid document — including one timestamped implausibly far ahead of the
+// server, see WithProgressionSkew — 409 when the stored progression is more
+// recent, 403 when the store returns ErrProgressionIncorrectUser or
+// ErrProgressionLocked).
+// Every error but the 401 challenge — which carries the Authentication
+// Document — carries an RFC 7807 problem body with the draft's registry type
+// and title. The injected links carry the draft's authenticate hint in 2.0
+// feeds (link properties.authenticate), pointing at the Authentication
+// Document so a client can skip the unauthenticated round-trip; OPDS 1.x
+// links have no properties and carry the plain link.
 //
 // The same endpoint also serves the pre-spec Cantook alias
 // (opds.RelProgressionCantook, advertised as a second injected link): the
@@ -47,12 +75,37 @@ type ProgressionStore interface {
 // the deployed servers' status semantics (GET 204 when nothing is stored,
 // PUT 204 on success). Publication-level progression, title, device, modified
 // and the locator href/fragments translate both ways; resource-level
-// progression and position have no draft equivalent and are dropped.
+// progression and position have no draft equivalent and are dropped. The
+// alias takes the device as sent — Komga hands out bare UUIDs where the draft
+// requires a URI — and round-trips it unchanged, so a Cantook client still
+// recognizes its own device; it is the draft document served for the same
+// record that carries the id in URI form.
 //
 // Progression is per-user by definition, so WithProgression requires WithAuth:
 // New panics when the store is configured without an Authenticator.
 func WithProgression(store ProgressionStore) Option {
 	return func(h *Handler) { h.progression = store }
+}
+
+// DefaultProgressionSkew is how far ahead of the server a submitted modified
+// timestamp may be before the handler rejects it. It is generous enough to
+// absorb any timezone-as-UTC bug (at most 14 hours) with room to spare.
+const DefaultProgressionSkew = 24 * time.Hour
+
+// WithProgressionSkew sets how far into the future a submitted modified
+// timestamp may be, overriding DefaultProgressionSkew. A zero or negative
+// duration disables the check.
+//
+// The check exists because the draft orders updates by a client-supplied
+// timestamp: one device whose clock is years fast would store a progression
+// no honest later update could ever beat, locking the publication behind a
+// permanent 409. E-ink readers lose their clocks on a flat battery often
+// enough that this is a practical failure, not a theoretical one, so a PUT
+// too far ahead is refused as an invalid payload — and a stored timestamp
+// already beyond the allowance is treated as not-newer, which lets the next
+// honest update heal a record poisoned before this check existed.
+func WithProgressionSkew(d time.Duration) Option {
+	return func(h *Handler) { h.progSkew = d }
 }
 
 // ProgressionPath returns the request path for the progression endpoint of the
@@ -72,6 +125,8 @@ const (
 	mediaTypeProblem          = "application/problem+json"
 	problemProgressionInvalid = "https://registry.opds.io/error#progression-invalid-payload"
 	problemProgressionDate    = "https://registry.opds.io/error#progression-date"
+	problemProgressionUser    = "https://registry.opds.io/error#progression-incorrect-user"
+	problemProgressionLocked  = "https://registry.opds.io/error#progression-locked"
 )
 
 // maxProgressionBody bounds a PUT body; real Progression Documents are tiny.
@@ -91,6 +146,10 @@ func (h *Handler) serveProgression(w http.ResponseWriter, r *http.Request, id st
 		http.NotFound(w, r)
 		return
 	}
+	// Per-user and mutable: RFC 9111 already bars shared caches from storing
+	// an authenticated response, but a client- or proxy-side copy of someone's
+	// reading position is worth refusing outright.
+	w.Header().Set("Cache-Control", "no-store")
 	user, _ := User(r.Context()) // authenticated: New requires WithAuth
 	readium := readiumRequest(r)
 	if r.Method == http.MethodPut {
@@ -99,7 +158,7 @@ func (h *Handler) serveProgression(w http.ResponseWriter, r *http.Request, id st
 	}
 	p, err := h.progression.Progression(r.Context(), user, id)
 	if err != nil && !errors.Is(err, opds.ErrNotFound) {
-		h.handleError(w, r, err)
+		h.handleProgressionError(w, r, err)
 		return
 	}
 	if p == nil {
@@ -124,7 +183,7 @@ func (h *Handler) serveProgression(w http.ResponseWriter, r *http.Request, id st
 		body, err = marshalProgression(p)
 	}
 	if err != nil {
-		h.handleError(w, r, err)
+		h.handleProgressionError(w, r, err)
 		return
 	}
 	write(w, r, ct, body)
@@ -161,6 +220,10 @@ func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, i
 		writeProblem(w, http.StatusBadRequest, problemProgressionInvalid)
 		return
 	}
+	if h.implausible(p.Modified) {
+		writeProblem(w, http.StatusBadRequest, problemProgressionInvalid)
+		return
+	}
 	// The staleness check and the store write must be atomic per (user,
 	// publication), or a concurrent older PUT could land after a newer one —
 	// the regression the 409 exists to prevent. This serializes them within
@@ -172,15 +235,18 @@ func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, i
 	defer mu.Unlock()
 	existing, err := h.progression.Progression(r.Context(), user, id)
 	if err != nil && !errors.Is(err, opds.ErrNotFound) {
-		h.handleError(w, r, err)
+		h.handleProgressionError(w, r, err)
 		return
 	}
-	if existing != nil && p.Modified.Before(existing.Modified) {
+	// A stored timestamp beyond the skew allowance cannot be honest, so it
+	// does not get to win the comparison: that is what lets an honest update
+	// heal a record poisoned by a device with a broken clock.
+	if existing != nil && p.Modified.Before(existing.Modified) && !h.implausible(existing.Modified) {
 		writeProblem(w, http.StatusConflict, problemProgressionDate)
 		return
 	}
 	if err := h.progression.SetProgression(r.Context(), user, id, p); err != nil {
-		h.handleError(w, r, err)
+		h.handleProgressionError(w, r, err)
 		return
 	}
 	if readium {
@@ -190,7 +256,7 @@ func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, i
 	}
 	out, err := marshalProgression(p)
 	if err != nil {
-		h.handleError(w, r, err)
+		h.handleProgressionError(w, r, err)
 		return
 	}
 	code := http.StatusOK
@@ -202,20 +268,64 @@ func (h *Handler) putProgression(w http.ResponseWriter, r *http.Request, user, i
 	w.Write(out)
 }
 
+// problemTitles are the titles the draft pairs with each registry error type.
+var problemTitles = map[string]string{
+	problemProgressionInvalid: "Progression could not be updated due to an invalid payload.",
+	problemProgressionDate:    "A more recent progression point is already available.",
+	problemProgressionUser:    "Progression could not be updated for the current user.",
+	problemProgressionLocked:  "Progression can no longer be updated for this publication.",
+}
+
+// implausible reports whether t is further ahead of the server's clock than
+// the configured skew allowance permits. See WithProgressionSkew.
+func (h *Handler) implausible(t time.Time) bool {
+	return h.progSkew > 0 && t.After(time.Now().Add(h.progSkew))
+}
+
 // writeProblem writes an RFC 7807 problem response with the registry title for
 // the given problem type.
 func writeProblem(w http.ResponseWriter, code int, typeURI string) {
-	titles := map[string]string{
-		problemProgressionInvalid: "Progression could not be updated due to an invalid payload.",
-		problemProgressionDate:    "A more recent progression point is already available.",
+	writeProblemDetail(w, code, typeURI, problemTitles[typeURI])
+}
+
+// writeProblemDetail writes an RFC 7807 problem response. An empty typeURI is
+// reported as "about:blank", RFC 7807's default for errors with no type of
+// their own — the draft requires both members to be present.
+func writeProblemDetail(w http.ResponseWriter, code int, typeURI, title string) {
+	if typeURI == "" {
+		typeURI = "about:blank"
 	}
 	body, _ := json.Marshal(struct {
 		Type  string `json:"type"`
 		Title string `json:"title"`
-	}{typeURI, titles[typeURI]})
+	}{typeURI, title})
 	w.Header().Set("Content-Type", mediaTypeProblem)
 	w.WriteHeader(code)
 	w.Write(body)
+}
+
+// handleProgressionError reports a store failure on the progression endpoint.
+// It maps the store's two refusal sentinels to the draft's 403 problem types
+// and everything else to a 500, in both cases with the Problem Details payload
+// the draft requires for errors other than 401.
+func (h *Handler) handleProgressionError(w http.ResponseWriter, r *http.Request, err error) {
+	// The two sentinels are protocol vocabulary, not failures: they are the
+	// store's way of choosing a response the draft defines, so they are
+	// answered before a WithErrorHandler hook, which owns unclassified
+	// failures only.
+	switch {
+	case errors.Is(err, ErrProgressionIncorrectUser):
+		writeProblem(w, http.StatusForbidden, problemProgressionUser)
+		return
+	case errors.Is(err, ErrProgressionLocked):
+		writeProblem(w, http.StatusForbidden, problemProgressionLocked)
+		return
+	}
+	if h.errorHandler != nil {
+		h.errorHandler(w, r, err)
+		return
+	}
+	writeProblemDetail(w, http.StatusInternalServerError, "", "Progression could not be retrieved or updated.")
 }
 
 // Wire shape of a Progression Document. Progression is a pointer so a missing
@@ -235,13 +345,90 @@ type deviceJSON struct {
 
 func marshalProgression(p *opds.Progression) ([]byte, error) {
 	v := p.Progression
+	id, name := normalizeDevice(p.Device)
 	return json.Marshal(progressionJSON{
 		Title:       p.Title,
 		Modified:    p.Modified.UTC().Format(time.RFC3339),
-		Device:      deviceJSON{ID: p.Device.ID, Name: p.Device.Name},
+		Device:      deviceJSON{ID: id, Name: name},
 		Progression: &v,
 		References:  p.References,
 	})
+}
+
+// Placeholders for a device a stored progression cannot name. The URN is
+// under the "opds" informal namespace and is only ever emitted, never
+// interpreted.
+const (
+	unknownDeviceID   = "urn:opds:device:unknown"
+	unknownDeviceName = "Unknown device"
+)
+
+// normalizeDevice coerces a device into the shape the draft's schema requires
+// of a served document: an absolute-URI id and a non-empty name. A draft-path
+// PUT is validated up front and never needs this; it exists for records that
+// reached the store some other way — through the lenient Cantook alias, or
+// from an application's own writes and migrations — so that no such record can
+// make the handler serve a document that fails the published schema. A bare
+// UUID (the id Komga and Stump hand out) becomes the urn:uuid: form the draft
+// itself uses in every example; anything else opaque is wrapped in a URN whose
+// escaped tail preserves the original bytes.
+func normalizeDevice(d opds.Device) (id, name string) {
+	id, name = d.ID, d.Name
+	if name == "" {
+		name = unknownDeviceName
+	}
+	switch {
+	case id == "":
+		id = unknownDeviceID
+	case absoluteURI(id):
+	case isUUID(id):
+		id = "urn:uuid:" + id
+	default:
+		id = "urn:opds:device:" + url.PathEscape(id)
+	}
+	return id, name
+}
+
+// absoluteURI reports whether s is a URI with a scheme, which is what the
+// draft's schema means by "format": "uri" for a device id.
+func absoluteURI(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme != "" && u.IsAbs()
+}
+
+// isUUID reports whether s is a plain 8-4-4-4-12 hex UUID.
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// validReferences reports whether every reference parses as a URI reference,
+// which the draft's schema requires of the documents this handler serves. An
+// empty entry refines nothing and is treated as a mistake.
+func validReferences(refs []string) bool {
+	for _, ref := range refs {
+		if ref == "" {
+			return false
+		}
+		if _, err := url.Parse(ref); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // unmarshalProgression parses and validates a Progression Document, enforcing
@@ -260,6 +447,16 @@ func unmarshalProgression(body []byte) (*opds.Progression, error) {
 	}
 	if doc.Device.ID == "" || doc.Device.Name == "" {
 		return nil, errors.New("opdshttp: progression device id and name are required")
+	}
+	// The schema types device.id as a URI. Enforcing it on the way in is what
+	// keeps every document this handler later serves for the record valid,
+	// and it costs a client nothing: the draft's own examples are all urn:uuid
+	// or https.
+	if !absoluteURI(doc.Device.ID) {
+		return nil, errors.New("opdshttp: progression device id must be an absolute URI")
+	}
+	if !validReferences(doc.References) {
+		return nil, errors.New("opdshttp: progression references must be URI references")
 	}
 	return &opds.Progression{
 		Progression: *doc.Progression,
@@ -338,13 +535,25 @@ func unmarshalReadiumProgression(body []byte) (*opds.Progression, error) {
 	if tp < 0 || tp > 1 {
 		return nil, errors.New("opdshttp: totalProgression outside [0, 1]")
 	}
+	// The locator href may already carry a fragment. Split it off before
+	// joining, so an href like "c1.html#x" cannot produce a second "#" — and
+	// keep that fragment as the reference when locations carries none of its
+	// own.
+	href, hrefFragment, _ := strings.Cut(doc.Locator.Href, "#")
+	fragments := doc.Locator.Locations.Fragments
+	if len(fragments) == 0 && hrefFragment != "" {
+		fragments = []string{hrefFragment}
+	}
 	var refs []string
-	if fragments := doc.Locator.Locations.Fragments; len(fragments) > 0 {
+	if len(fragments) > 0 {
 		for _, f := range fragments {
-			refs = append(refs, doc.Locator.Href+"#"+f)
+			refs = append(refs, href+"#"+f)
 		}
-	} else if doc.Locator.Href != "" {
-		refs = []string{doc.Locator.Href}
+	} else if href != "" {
+		refs = []string{href}
+	}
+	if !validReferences(refs) {
+		return nil, errors.New("opdshttp: locator does not yield valid URI references")
 	}
 	return &opds.Progression{
 		Progression: tp,

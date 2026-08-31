@@ -227,6 +227,18 @@ store also answer the pre-spec Cantook rel
 (`http://www.cantook.com/api/progression`, the Readium-locator shape) that
 Komga and Stump serve and the Cantook/Aldiko client family consumes.
 
+In 2.0 feeds the injected links carry the draft's `authenticate` hint
+(`properties.authenticate`, pointing at the Authentication Document) so a
+client can present credentials without first spending a 401. A `modified`
+timestamp implausibly far ahead of the server is refused (see
+`WithProgressionSkew`), so a reader whose clock is years fast cannot store a
+position that no honest later update could beat. Errors follow
+the draft's registry: `400` for an invalid payload, `409` when the stored
+progression is more recent, and `403` when your store returns
+`opdshttp.ErrProgressionIncorrectUser` or `opdshttp.ErrProgressionLocked` —
+each with an RFC 7807 problem body, except the `401` challenge, which carries
+the Authentication Document.
+
 Try it live: `go run ./examples/bookstore --auth` (user `demo`, password
 `demo`).
 
@@ -327,9 +339,10 @@ Vendored schema provenance (and the one documented upstream-typo fix in
 - Per-user reading-progression sync via the
   [OPDS Progression 1.0 draft](https://drafts.opds.io/opds-progression-1.0.html)
   (`opdshttp.WithProgression`, backed by a caller-supplied `ProgressionStore`):
-  publications are advertised with a progression link, and the handler serves
-  GET/PUT with the draft's validation, staleness (409), and problem-details
-  semantics. Requires `WithAuth` — progression is per-user by definition. The
+  publications are advertised with a progression link (carrying the draft's
+  `authenticate` hint in 2.0), and the handler serves GET/PUT with the draft's
+  validation, staleness (409), refusal (403) and problem-details semantics.
+  Requires `WithAuth` — progression is per-user by definition. The
   same endpoint and store also serve the pre-spec Cantook alias
   (`http://www.cantook.com/api/progression`, the Readium-locator shape that
   Komga and Stump serve and Cantook/Aldiko consume), translated with the

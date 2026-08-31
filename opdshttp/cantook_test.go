@@ -108,7 +108,11 @@ func TestCantookPutTranslatesOntoStore(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("draft GET: %v\n%s", err, w.Body.String())
 	}
-	if doc.Progression != 0.25 || doc.Title != "Page 5" || doc.Device.ID != "device-123" {
+	// The alias accepts Komga's opaque device id as sent, but the draft
+	// document served for the same record must carry a URI, so the id is
+	// wrapped on the way out rather than emitted as a bare token the draft's
+	// schema would reject.
+	if doc.Progression != 0.25 || doc.Title != "Page 5" || doc.Device.ID != "urn:opds:device:device-123" {
 		t.Errorf("translated doc = %+v", doc)
 	}
 	if len(doc.References) != 1 || doc.References[0] != "/books/1/pages/5" {
@@ -130,7 +134,9 @@ func TestCantookPutTranslatesOntoStore(t *testing.T) {
 	if rdoc.Locator.Locations.TotalProgression != 0.25 || rdoc.Locator.Href != "/books/1/pages/5" {
 		t.Errorf("round-trip = %+v", rdoc.Locator)
 	}
-	if rdoc.Device.Name != "Aldiko Next" || rdoc.Locator.Title != "Page 5" {
+	// The alias round-trips the id it was given: a Cantook client must still
+	// recognize its own device.
+	if rdoc.Device.ID != "device-123" || rdoc.Device.Name != "Aldiko Next" || rdoc.Locator.Title != "Page 5" {
 		t.Errorf("device/title = %+v / %q", rdoc.Device, rdoc.Locator.Title)
 	}
 }

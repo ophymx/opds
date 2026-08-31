@@ -56,11 +56,20 @@ type jsonProperties struct {
 	Availability  *jsonAvailability `json:"availability,omitempty"`
 	Holds         *jsonHolds        `json:"holds,omitempty"`
 	Copies        *jsonCopies       `json:"copies,omitempty"`
+	Authenticate  *jsonAuthenticate `json:"authenticate,omitempty"`
 }
 
 func (p *jsonProperties) empty() bool {
 	return p.NumberOfItems == 0 && p.Price == nil && len(p.Indirect) == 0 &&
-		p.Availability == nil && p.Holds == nil && p.Copies == nil
+		p.Availability == nil && p.Holds == nil && p.Copies == nil &&
+		p.Authenticate == nil
+}
+
+// jsonAuthenticate is the properties.authenticate hint: a link to the
+// Authentication Document for a target that requires credentials.
+type jsonAuthenticate struct {
+	Href string `json:"href"`
+	Type string `json:"type,omitempty"`
 }
 
 type jsonPrice struct {
