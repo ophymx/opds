@@ -5,7 +5,9 @@ A Go library for building, implementing, and embedding [OPDS](https://opds.io)
 readers and library systems use to browse, search, and acquire publications.
 
 You model your catalog **once**, with version-neutral types, and the library
-serializes it to either supported wire format, chosen by content negotiation:
+serializes it to either supported wire format, chosen by content negotiation.
+The same types come back the other way: `opdsclient` fetches and decodes
+catalogs, so one traversal works against either format.
 
 | Version | Format | Status | Clients |
 |---|---|---|---|
@@ -28,10 +30,11 @@ go get github.com/ophymx/opds
 | Package | Purpose |
 |---|---|
 | `opds` | Version-neutral domain model, constants, and fluent builders. |
-| `opds/opds1` | Encodes the model to OPDS 1.2 (Atom XML). |
-| `opds/opds2` | Encodes the model to OPDS 2.0 (JSON). |
-| `opds/opensearch` | Generates OpenSearch description documents (1.x search). |
+| `opds/opds1` | Encodes and decodes OPDS 1.2 (Atom XML). |
+| `opds/opds2` | Encodes and decodes OPDS 2.0 (JSON). |
+| `opds/opensearch` | OpenSearch description documents and template expansion (1.x search). |
 | `opds/opdshttp` | Embeddable `http.Handler`: routing, content negotiation, pagination, search, Basic authentication, progression sync. |
+| `opds/opdsclient` | HTTP client: fetches and decodes either version, authenticates, syncs progression. |
 | `opds/progstore` | Durable file-backed `ProgressionStore` (plus OPDS-PSE last-read storage). |
 
 ## Quick start
@@ -242,6 +245,81 @@ the Authentication Document.
 Try it live: `go run ./examples/bookstore --auth` (user `demo`, password
 `demo`).
 
+## Consuming a catalog
+
+`opdsclient` is the other side of `opdshttp`. It works in the same
+version-neutral types, so one traversal runs against an OPDS 1.2 Atom catalog
+and an OPDS 2.0 JSON one alike: the client negotiates the version, decodes
+whichever it is handed, and resolves every href in the result to an absolute
+URL so you can follow links without tracking base URLs yourself.
+
+```go
+c, err := opdsclient.New("https://example.com/opds/",
+    opdsclient.WithBasicAuth("jane", "secret"),
+    opdsclient.WithUserAgent("tankobon/1.0"),
+    opdsclient.WithDevice(opds.Device{ID: "urn:uuid:…", Name: "Kobo Elipsa"}))
+
+root, err := c.Root(ctx)
+for _, nav := range root.Navigation {
+    feed, err := c.Feed(ctx, nav.Href)   // relative or absolute, either works
+    for _, p := range feed.Publications {
+        res, err := c.Open(ctx, p.Acquisitions[0].Href)  // download
+        defer res.Body.Close()
+    }
+}
+
+// Paging, across both versions:
+for f, err := c.Root(ctx); f != nil && err == nil; f, err = c.Next(ctx, f) { … }
+
+// Search, whichever way the catalog advertises it:
+results, err := c.Search(ctx, root, "kafka")
+```
+
+**Authentication.** Credentials are sent preemptively — but only to the
+catalog's own host, so following a cover link to a CDN or an acquisition to a
+partner site does not leak them. A 401 comes back as an `*opdsclient.Error`
+carrying the catalog's Authentication Document, and `DiscoverAuth` asks for it
+up front, so an application can prompt with the catalog's own labels ("Library
+card", "PIN") before it has any credentials to try:
+
+```go
+doc, err := c.DiscoverAuth(ctx)   // nil, nil when the catalog is open
+if doc != nil && doc.SupportsBasic() {
+    user, pass := prompt(doc.Title, doc.LoginLabel, doc.PasswordLabel)
+}
+```
+
+**Progression sync.** `ProgressionLink` finds a publication's endpoint —
+preferring the draft relation, falling back to the pre-spec Cantook one that
+Komga and Stump serve — and the client speaks whichever document shape the link
+implies:
+
+```go
+link, ok := opdsclient.ProgressionLink(&pub)
+pos, err := c.Progression(ctx, link)   // nil, nil when nothing is stored yet
+
+err = c.SetProgression(ctx, link, &opds.Progression{
+    Progression: 0.42,
+    Title:       "Chapter 4",
+    References:  []string{"/chapter4.html#p12"},
+})   // device and timestamp filled in from the client's configuration
+if errors.Is(err, opdsclient.ErrProgressionStale) {
+    // the server has a newer position; take it rather than retrying
+}
+```
+
+Every failing request returns an `*opdsclient.Error` — carrying the status, the
+RFC 7807 problem body, and the Authentication Document when there was one —
+that unwraps to a sentinel: `ErrUnauthorized`, `opds.ErrNotFound`,
+`ErrProgressionStale`, `ErrProgressionLocked`, and the rest.
+
+**Page streaming.** For comic and manga catalogs, `PageURL` expands an OPDS-PSE
+template and `Page` fetches one page:
+
+```go
+res, err := c.Page(ctx, pub.PageStream, 0, 1200)   // page 0, max width 1200px
+```
+
 ## Deployment notes
 
 - **Serve authenticated catalogs over HTTPS.** Basic authentication sends
@@ -283,15 +361,24 @@ The handler picks the version per request, in priority order:
 {prefix}/progression/{id}  per-user reading progression, GET/PUT (with WithProgression)
 ```
 
-## Using the encoders directly
+## Using the codecs directly
 
-You don't have to use `opdshttp`. The encoders turn a `*opds.Feed` into bytes,
-so they drop into any framework or static-generation pipeline:
+You don't have to use `opdshttp` or `opdsclient`. The codecs turn a
+`*opds.Feed` into bytes and back, so they drop into any framework, static
+generation pipeline, or crawler:
 
 ```go
 xmlBytes, _ := opds1.Marshal(feed)  // OPDS 1.2 Atom
 jsonBytes, _ := opds2.Marshal(feed) // OPDS 2.0 JSON
+
+feed, _ := opds1.Unmarshal(xmlBytes)
+feed, _ := opds2.Unmarshal(jsonBytes)
 ```
+
+Decoding is the inverse of encoding, and the round trip is tested both ways.
+A handful of members belong to only one version and do not survive the other
+(`PageStream` is 1.x-only, `Series` and `SortAs` are 2.0-only, and so on); each
+decoder's doc comment lists exactly what it drops.
 
 ## Conformance
 
@@ -336,6 +423,12 @@ Vendored schema provenance (and the one documented upstream-typo fix in
   Document body (for clients like Thorium and Cantook), feeds advertise the
   document link, and the authenticated identity reaches your `Source` via
   `opdshttp.User`.
+- A client (`opdsclient`) for the same protocols: version-negotiated fetching
+  and decoding of both formats, absolute-href resolution, Basic authentication
+  with Authentication Document discovery, OpenSearch and 2.0-template search,
+  OPDS-PSE page fetching, and progression sync over both the draft endpoint and
+  the Cantook alias — with typed errors for every condition the specs define.
+  It is tested by driving the library's own handler over HTTP in both versions.
 - Per-user reading-progression sync via the
   [OPDS Progression 1.0 draft](https://drafts.opds.io/opds-progression-1.0.html)
   (`opdshttp.WithProgression`, backed by a caller-supplied `ProgressionStore`):

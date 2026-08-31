@@ -9,15 +9,20 @@
 //   - OPDS 2.0, a JSON format built on the Readium Web Publication Manifest.
 //
 // Both express the same conceptual model, so this library models a catalog
-// once, with version-neutral types, and lets pluggable encoders serialize to
-// either format:
+// once, with version-neutral types, and lets pluggable codecs serialize to and
+// from either format:
 //
-//   - Package opds            the domain model, constants and builders (this package).
-//   - Package opds/opds1       encodes the model to OPDS 1.2 (Atom XML).
-//   - Package opds/opds2       encodes the model to OPDS 2.0 (JSON).
-//   - Package opds/opensearch  generates OpenSearch description documents (1.x search).
-//   - Package opds/opdshttp    an embeddable http.Handler tying it together.
+//   - Package opds             the domain model, constants and builders (this package).
+//   - Package opds/opds1       encodes and decodes OPDS 1.2 (Atom XML).
+//   - Package opds/opds2       encodes and decodes OPDS 2.0 (JSON).
+//   - Package opds/opensearch  OpenSearch description documents (1.x search).
+//   - Package opds/opdshttp    an embeddable http.Handler serving a catalog.
+//   - Package opds/opdsclient  an HTTP client consuming one.
+//   - Package opds/progstore   a durable store for reading progression.
 //
 // To expose a catalog you implement the Source interface (and, optionally,
-// Searcher) and hand it to opds/opdshttp, or drive the encoders directly.
+// Searcher) and hand it to opds/opdshttp, or drive the encoders directly. To
+// consume one, point opds/opdsclient at its root: it negotiates the version,
+// decodes whichever it is served, and hands back the same neutral types, so a
+// caller writes one traversal for both formats.
 package opds
